@@ -1,0 +1,31 @@
+# Python virtual environments
+.venv/
+env/
+
+# Environment files
+.env
+
+# Python cache / compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and test outputs
+logs/
+test_output/
+
+# Application-generated data
+Doctors_Profile/
+qdrant_data/
+outputs/
+
+# Git & editor artifacts
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

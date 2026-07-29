@@ -1,0 +1,82 @@
+services:
+  qdrant:
+    image: qdrant/qdrant
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: face_recognition_api
+    runtime: nvidia   # ✅ GPU support
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - TF_XLA_FLAGS=--tf_xla_enable_xla_devices=false
+      - CUDA_CACHE_PATH=/tmp/cuda_cache
+      - CUDA_CACHE_MAXSIZE=2147483648
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./:/app
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+      - /home/admin1/Zydus/Backend/uploads:/home/admin1/Zydus/Backend/uploads
+    restart: unless-stopped
+
+  rabbitmq_consumer:
+    build: .
+    container_name: attendance_consumer
+    command: python -m app.services.attendance_consumer
+    env_file:
+      - .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      # mysql:
+      #   condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+    - ./:/app
+    - ./logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  # mysql_data:
+  qdrant_data:
+
