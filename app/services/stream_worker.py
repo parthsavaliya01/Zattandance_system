@@ -19,6 +19,7 @@ from app.scripts.publisher_singleton import publisher as rabbitmq_publisher
 from app.core.config import settings
 from app.models.load_yolo_model import load_yolo_model
 from logging.handlers import RotatingFileHandler
+from app.core.logging_config import setup_missed_proof_logger
 
 logger = logging.getLogger(__name__)
 tz = pytz.timezone(settings.TIMEZONE)
@@ -68,6 +69,7 @@ class StreamWorker:
         self.COOLDOWN_SECONDS = 300  # Increased to avoid re-firing if track breaks and reconnects
 
         self.logger = logging.getLogger(f"camera.{camera_id}.worker")
+        self.missed_proof_logger = setup_missed_proof_logger(camera_id)
         self.BASE_OUTPUT_DIR = "outputs"
 
         # ── Output directories ────────────────────────────────────────────
@@ -430,7 +432,10 @@ class StreamWorker:
                         "doctor_votes": {},
                         "frames_processed": 0,
                         "attendance_fired": False,
-                        "last_seen": current_time
+                        "last_seen": current_time,
+                        "blurry_saved": False,
+                        "invalid_angle_saved": False,
+                        "low_score_saved": False
                     }
                 
                 state = self.track_states[track_id]
@@ -438,6 +443,10 @@ class StreamWorker:
 
                 failure_reason = item.get("failure_reason")
                 if failure_reason == "blurry":
+                    if not state.get("blurry_saved"):
+                        blur_score = item.get("blur_score", 0.0)
+                        self._save_missed_proof(frame, yolo_area, "blurry", f"{blur_score:.2f}")
+                        state["blurry_saved"] = True
                     continue
 
                 # ── GPU OPTIMIZATION: Skip AdaFace if this track is already confirmed ──
@@ -461,6 +470,9 @@ class StreamWorker:
 
                 # ── stage 5: facial area validation ──────────────────────
                 if not self.is_valid_facial_area(area):
+                    if not state.get("invalid_angle_saved"):
+                        self._save_missed_proof(frame, yolo_area, "invalid_angle", "0.00")
+                        state["invalid_angle_saved"] = True
                     continue
 
                 # ── stage 6: Qdrant vector search ─────────────────────────
@@ -476,6 +488,10 @@ class StreamWorker:
                 doctor_name = payload.get("doctor_name", "Unknown")
 
                 if score < MARGINAL_LOW or not doctor_id:
+                    if not state.get("low_score_saved"):
+                        name_to_save = doctor_name if (doctor_id and doctor_name) else "Unknown"
+                        self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", name_to_save)
+                        state["low_score_saved"] = True
                     continue
 
                 # Record vote
@@ -502,6 +518,9 @@ class StreamWorker:
                     passed_attendance = True
 
                 if not passed_attendance:
+                    if not state.get("low_score_saved"):
+                        self._save_missed_proof(frame, yolo_area, "low_score", f"{avg_score:.3f}", doctor_name)
+                        state["low_score_saved"] = True
                     continue
 
                 # Special strict rule for Nancy Amin
@@ -595,6 +614,42 @@ class StreamWorker:
         }
         self.rabbitmq_publisher.publish(event)
         self.logger.info(f"[{self.camera_id}] Recognised {doctor_name} (score={score:.3f})")
+
+    def _save_missed_proof(self, frame, area, category, value_str, name="Unknown"):
+        try:
+            now = datetime.now(tz)
+            date_str = now.strftime("%Y%m%d")
+            time_str = now.strftime("%H%M%S")
+            
+            target_dir = os.path.join(self.BASE_OUTPUT_DIR, "missed_proofs", date_str, category)
+            os.makedirs(target_dir, exist_ok=True)
+            
+            safe_name = name.replace(" ", "_")
+            if category == "low_score":
+                filename = f"{date_str}_{time_str}_SCORE-{value_str}_{safe_name}_cam{self.camera_id}.jpg"
+            elif category == "blurry":
+                filename = f"{date_str}_{time_str}_var-{value_str}_Unknown_cam{self.camera_id}.jpg"
+            else:
+                filename = f"{date_str}_{time_str}_angle-check_Unknown_cam{self.camera_id}.jpg"
+                
+            save_path = os.path.join(target_dir, filename)
+            
+            x, y, w, h = area["x"], area["y"], area["w"], area["h"]
+            H, W = frame.shape[:2]
+            
+            pad_w = int(w * 0.4)
+            pad_h = int(h * 0.4)
+            
+            x1 = max(0, x - pad_w)
+            y1 = max(0, y - pad_h)
+            x2 = min(W, x + w + pad_w)
+            y2 = min(H, y + h + pad_h)
+            
+            if x1 < x2 and y1 < y2:
+                cv2.imwrite(save_path, frame[y1:y2, x1:x2])
+                self.missed_proof_logger.info(f"[MISSED PROOF] saved ({category}) → {filename}")
+        except Exception as e:
+            self.missed_proof_logger.error(f"[MISSED PROOF] failed to save: {e}")
 
     def _heartbeat(self):
         while not self.stop_event.is_set():
