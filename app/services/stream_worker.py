@@ -494,9 +494,17 @@ class StreamWorker:
                 doctor_id   = payload.get("doctor_id")
                 doctor_name = payload.get("doctor_name", "Unknown")
 
+<<<<<<< HEAD
                 if not doctor_id:
                     state["consecutive_doctor_id"] = None
                     state["consecutive_timestamps"] = []
+=======
+                if score < MARGINAL_LOW or not doctor_id:
+                    if not state.get("low_score_saved"):
+                        name_to_save = doctor_name if (doctor_id and doctor_name) else "Unknown"
+                        self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", name_to_save)
+                        state["low_score_saved"] = True
+>>>>>>> Development
                     continue
 
                 # ── stage 7: temporal consistency ─────────────────────────
@@ -509,6 +517,7 @@ class StreamWorker:
                     state["consecutive_doctor_id"] = doctor_id
                     state["consecutive_timestamps"] = [current_time]
 
+<<<<<<< HEAD
                 # Keep only timestamps within window
                 state["consecutive_timestamps"] = [
                     t for t in state["consecutive_timestamps"]
@@ -516,6 +525,12 @@ class StreamWorker:
                 ]
 
                 if len(state["consecutive_timestamps"]) < consec_frames:
+=======
+                if not passed_attendance:
+                    if not state.get("low_score_saved"):
+                        self._save_missed_proof(frame, yolo_area, "low_score", f"{avg_score:.3f}", doctor_name)
+                        state["low_score_saved"] = True
+>>>>>>> Development
                     continue
 
                 # Special strict rule for Nancy Amin

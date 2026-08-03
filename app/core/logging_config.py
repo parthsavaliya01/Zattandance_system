@@ -115,3 +115,7 @@ def setup_missed_proof_logger(camera_id: str):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
     return logger
+<<<<<<< HEAD
+=======
+
+>>>>>>> Development
