@@ -89,3 +89,29 @@ def setup_logging(log_file: str,level=logging.INFO,with_console: bool=True):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("pika").setLevel(logging.WARNING)
     logging.getLogger("pika.adapters").setLevel(logging.WARNING)
+
+
+def setup_missed_proof_logger(camera_id: str):
+    log_type = "entry" if camera_id == "111" else "exit"
+    log_filename = f"logs/missed_proof_{log_type}.log"
+    
+    logger = logging.getLogger(f"missed_proof.{camera_id}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    
+    if logger.handlers:
+        return logger
+        
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+    )
+    
+    os.makedirs("logs", exist_ok=True)
+    fh = RotatingFileHandler(
+        log_filename,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=3,
+    )
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+    return logger

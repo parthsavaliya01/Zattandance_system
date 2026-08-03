@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     RECORDINGS_PATH: str = "./recordings"
 
     QDRANT_COLLECTION_NAME: str = 'doctors_adaface'
+    QDRANT_COLLECTION_CENTROIDS: str = 'doctor_centroids'
+    QDRANT_COLLECTION_EMBEDDINGS: str = 'doctor_embeddings'
+    CENTROID_THRESHOLD: float = 0.35
+    VERIFICATION_THRESHOLD: float = 0.38
+    CONSECUTIVE_FRAMES: int = 3
+    CONSECUTIVE_TIME_WINDOW: float = 3.0
+    TOP_K: int = 3
     ENROLL_FRONT_ONLY: bool = False
     ENROLL_FRONT_FILENAME_KEYWORDS: str = "front_face,front_profile,front"
     ENROLL_MIN_CONF: float = 0.40

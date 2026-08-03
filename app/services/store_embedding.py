@@ -61,6 +61,30 @@ def get_embedding_from_face(face_rgb, timeout=3.0):
     return faces[0]["embedding"] if faces else None
 
 
+from app.db.mysql_db import db_connection
+
+def get_doctor_details_from_db(doctor_id: str):
+    conn = db_connection()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT full_name, department_name FROM tbl_doctors WHERE id = %s", (doctor_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "doctor_name": row.get("full_name"),
+                "department": row.get("department_name")
+            }
+    except Exception as e:
+        logger.error(f"Error fetching doctor details from DB: {e}")
+    finally:
+        if 'cur' in locals() and cur:
+            cur.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+    return {}
+
 def store_single_image(face_path: str,
                        doctor_id: str,
                        doctor_name: str,
@@ -71,64 +95,128 @@ def store_single_image(face_path: str,
             logger.error(f"[store_single_image] face_path does not exist: {face_path}")
             return None
         
-        output_dir = "test_output/variants"
-        os.makedirs(output_dir, exist_ok=True)
-        
         face_rgb, facial_area = extract_embedding_from_image(face_path)
-        
-        # if emb is None or getattr(emb, "size", 0) == 0:
-        #     logger.error(f"[store_single_image] Failed to extract embedding from {face_path}")
-        #     return None
 
         if face_rgb is None:
             logger.error("[store_single_image] Failed to extract face crop")
             return None
         
-        face_variants = generate_face_variants(face_rgb)
-
-        stored = 0
         qdrant_client = qdrant_service.connect()
-
-        try:
-            collection_exists = qdrant_client.collection_exists(collection_name)
-        except Exception:
-            collection_exists = any(c.name == collection_name for c in qdrant_client.get_collections().collections)
-
-        for idx, variant in enumerate(face_variants):
+        
+        # Ensure collections exist
+        for col in [settings.QDRANT_COLLECTION_CENTROIDS, settings.QDRANT_COLLECTION_EMBEDDINGS]:
             try:
-                variant_bgr = cv2.cvtColor(variant, cv2.COLOR_RGB2BGR)
-                variant_filename = f"{doctor_name}_var{idx}.jpg"
-                variant_save_path = os.path.join(output_dir, variant_filename)
-                cv2.imwrite(variant_save_path, variant_bgr)
-                variant = cv2.cvtColor(variant_bgr, cv2.COLOR_BGR2RGB)
+                exists = qdrant_client.collection_exists(col)
+            except Exception:
+                exists = any(c.name == col for c in qdrant_client.get_collections().collections)
+            if not exists:
+                qdrant_service.create_collection(qdrant_client, col, vector_size=512)
 
-                
-                emb = get_embedding_from_face(variant)
-                if not collection_exists:
-                    logger.info(
-                        f"[store_single_image] Creating collection '{collection_name}' "
-                        f"(vector size={emb.shape[0]})"
+        emb = get_embedding_from_face(face_rgb)
+        if emb is None:
+            logger.error(f"[store_single_image] Failed to extract embedding from {face_path}")
+            return None
+
+        # Fetch doctor details from DB for payload
+        details = get_doctor_details_from_db(doctor_id)
+        real_doctor_name = details.get("doctor_name") or doctor_name
+        department = details.get("department") or "General"
+
+        # Determine image_number by scrolling existing points
+        from qdrant_client.http import models
+        existing_points, _ = qdrant_client.scroll(
+            collection_name=settings.QDRANT_COLLECTION_EMBEDDINGS,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="doctor_id",
+                        match=models.MatchValue(value=doctor_id)
                     )
-                    qdrant_service.create_collection(qdrant_client, collection_name, vector_size=emb.shape[0])
-                    collection_exists=True
+                ]
+            ),
+            with_vectors=True,
+            limit=100
+        )
 
-                raw_id = f"{doctor_id}_{uuid.uuid4()}"
-                point_id = int(md5(raw_id.encode()).hexdigest()[:16], 16)
-                metadata = {
-                    "doctor_id": doctor_id,
-                    "doctor_name": doctor_name,
-                    "profile_path": os.path.abspath(face_path),
-                    "facial_area": facial_area
-                }
+        # Check if this profile_path already exists to overwrite it
+        target_point = None
+        for p in existing_points:
+            if p.payload and p.payload.get("profile_path") == os.path.abspath(face_path):
+                target_point = p
+                break
 
-                qdrant_service.upsert_points(collection_name, vectors=[emb.tolist()], metadatas=[metadata], ids=[point_id])
-                stored += 1
-                logger.info(
-                    f"[store_single_image] Successfully stored embedding for {face_path} for variant {idx} "
-                    f"for doctor_id {doctor_id}")
-            except Exception as e:
-                logger.warning(f"[store_single_image] Failed variant {idx}: {e}")
-        return stored
+        if target_point:
+            image_number = target_point.payload.get("image_number", 1)
+        else:
+            existing_nums = {p.payload.get("image_number") for p in existing_points if p.payload}
+            image_number = 1
+            for i in range(1, 6):
+                if i not in existing_nums:
+                    image_number = i
+                    break
+            else:
+                image_number = len(existing_points) + 1
+
+        raw_id = f"{doctor_id}_img_{image_number}"
+        point_id = int(md5(raw_id.encode()).hexdigest()[:16], 16)
+        
+        metadata = {
+            "doctor_id": doctor_id,
+            "image_number": image_number,
+            "doctor_name": real_doctor_name,
+            "profile_path": os.path.abspath(face_path),
+            "facial_area": facial_area,
+            "department": department
+        }
+
+        qdrant_service.upsert_points(
+            settings.QDRANT_COLLECTION_EMBEDDINGS,
+            vectors=[emb.tolist()],
+            metadatas=[metadata],
+            ids=[point_id]
+        )
+        logger.info(f"[store_single_image] Successfully stored embedding for {face_path} at slot {image_number} for doctor {doctor_id}")
+
+        # Fetch all embeddings again to compute/update centroid
+        all_points, _ = qdrant_client.scroll(
+            collection_name=settings.QDRANT_COLLECTION_EMBEDDINGS,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="doctor_id",
+                        match=models.MatchValue(value=doctor_id)
+                    )
+                ]
+            ),
+            with_vectors=True,
+            limit=100
+        )
+
+        embeddings_list = [p.vector for p in all_points if p.vector is not None]
+        if embeddings_list:
+            embs_arr = np.array(embeddings_list)
+            centroid = np.mean(embs_arr, axis=0)
+            centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
+
+            centroid_raw_id = f"{doctor_id}_centroid"
+            centroid_point_id = int(md5(centroid_raw_id.encode()).hexdigest()[:16], 16)
+
+            centroid_payload = {
+                "doctor_id": doctor_id,
+                "doctor_name": real_doctor_name,
+                "department": department,
+                "profile_path": os.path.abspath(face_path)
+            }
+
+            qdrant_service.upsert_points(
+                settings.QDRANT_COLLECTION_CENTROIDS,
+                vectors=[centroid_norm.tolist()],
+                metadatas=[centroid_payload],
+                ids=[centroid_point_id]
+            )
+            logger.info(f"[store_single_image] Successfully updated centroid for doctor {doctor_id}")
+
+        return 1
     except Exception as e:
         logger.exception(f"❌ [store_single_image] Error storing {face_path}: {e}")
         return None
@@ -137,7 +225,6 @@ def store_multiple_images_parallel(root_dir: str,
                                    collection_name: str = "doctors",
                                    batch_size: int = 200
                                    ):
-
     try:
         if not os.path.exists(root_dir) or not os.path.isdir(root_dir):
             logger.error(f"[store_multiple_images_parallel] root_dir does not exist or is not a directory: {root_dir}")
@@ -145,17 +232,24 @@ def store_multiple_images_parallel(root_dir: str,
         
         logger.info(f"🔍 Scanning directory: {root_dir}")
 
-        # Collect files
         img_exts = (".jpg", ".jpeg", ".png")
-        face_items = []
-        results = []
         doctors = os.listdir(root_dir)
         start_time = time.time()
+        uploaded_count = 0
+
+        qdrant_client = qdrant_service.connect()
+        # Ensure collections exist
+        for col in [settings.QDRANT_COLLECTION_CENTROIDS, settings.QDRANT_COLLECTION_EMBEDDINGS]:
+            try:
+                exists = qdrant_client.collection_exists(col)
+            except Exception:
+                exists = any(c.name == col for c in qdrant_client.get_collections().collections)
+            if not exists:
+                qdrant_service.create_collection(qdrant_client, col, vector_size=512)
 
         for doctor in doctors:
             doctor_path = os.path.join(root_dir, doctor)
             if not os.path.isdir(doctor_path):
-                logger.error(f"⚠️ Skipping {doctor_path} - not a directory")
                 continue
 
             image_files = [f for f in os.listdir(doctor_path) if f.lower().endswith(img_exts)]
@@ -165,100 +259,111 @@ def store_multiple_images_parallel(root_dir: str,
             selected_files = image_files
             if settings.ENROLL_FRONT_ONLY:
                 front_files = [f for f in image_files if _is_front_profile_image(f)]
-                if not front_files:
-                    logger.warning(
-                        f"[store_multiple_images_parallel] No front profile image found for doctor folder {doctor_path}; skipping"
-                    )
-                    continue
-                selected_files = [sorted(front_files, key=_front_image_priority)[0]]
+                if front_files:
+                    selected_files = [sorted(front_files, key=_front_image_priority)[0]]
 
-            for file in selected_files:
+            doctor_id = doctor
+            details = get_doctor_details_from_db(doctor_id)
+            doctor_name = details.get("doctor_name") or doctor_id
+            department = details.get("department") or "General"
+
+            # Clean start for this doctor to be idempotent
+            from qdrant_client.http import models
+            qdrant_client.delete(
+                collection_name=settings.QDRANT_COLLECTION_EMBEDDINGS,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="doctor_id",
+                                match=models.MatchValue(value=doctor_id)
+                            )
+                        ]
+                    )
+                )
+            )
+            qdrant_client.delete(
+                collection_name=settings.QDRANT_COLLECTION_CENTROIDS,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="doctor_id",
+                                match=models.MatchValue(value=doctor_id)
+                            )
+                        ]
+                    )
+                )
+            )
+
+            embeddings = []
+            payloads = []
+            ids = []
+
+            for idx, file in enumerate(selected_files):
                 face_path = os.path.join(doctor_path, file)
                 try:
-                    logger.info(f"[store_multiple_images_parallel] Extracting embedding from {face_path}....")
-                    emb, facial_area = extract_embedding_from_image(face_path)
-                    if emb is None or getattr(emb, "size", 0) == 0:
-                        logger.warning(f"[store_multiple_images_parallel] ❌ Failed to extract embedding from {face_path}")
+                    face_rgb, facial_area = extract_embedding_from_image(face_path)
+                    if face_rgb is None:
                         continue
-                    result = {
-                        "doctor_id": doctor,
-                        "doctor_name": doctor,
-                        "face_path": face_path,
-                        "embedding": emb.tolist(),
-                        "facial_area": facial_area
-                    }
-                    results.append(result)
-                    logger.info(f"[store_multiple_images_parallel] ✅ Extracted embedding from {face_path}")
+                    
+                    emb = get_embedding_from_face(face_rgb)
+                    if emb is None:
+                        continue
+
+                    image_number = idx + 1
+                    raw_id = f"{doctor_id}_img_{image_number}"
+                    point_id = int(md5(raw_id.encode()).hexdigest()[:16], 16)
+
+                    embeddings.append(emb.tolist())
+                    ids.append(point_id)
+                    payloads.append({
+                        "doctor_id": doctor_id,
+                        "image_number": image_number,
+                        "doctor_name": doctor_name,
+                        "profile_path": os.path.abspath(face_path),
+                        "facial_area": facial_area,
+                        "department": department
+                    })
                 except Exception as e:
-                    logger.exception(f"❌ [store_multiple_images_parallel] Error processing {face_path}: {e}")
+                    logger.error(f"Error processing {face_path} in parallel: {e}")
                     continue
 
-        logger.info(f"✅ Extracted {len(results)} embeddings in {time.time() - start_time:.2f}s ")
-        logger.info(f"📸 Found {len(results)} images for {len(doctors)}")
+            if embeddings:
+                # Upsert to doctor_embeddings
+                qdrant_service.upsert_points(
+                    settings.QDRANT_COLLECTION_EMBEDDINGS,
+                    vectors=embeddings,
+                    metadatas=payloads,
+                    ids=ids
+                )
+                uploaded_count += len(embeddings)
 
-        if not results:
-            logger.error("[store_multiple_images_parallel] ❌ No embeddings extracted")
-            return 0
-    
+                # Compute centroid
+                embs_arr = np.array(embeddings)
+                centroid = np.mean(embs_arr, axis=0)
+                centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
 
-        # Connect Qdrant
-        qdrant_client = qdrant_service.connect()
-        logger.info(f"[store_multiple_images_parallel] ✅ Connected to Qdrant")
+                centroid_raw_id = f"{doctor_id}_centroid"
+                centroid_point_id = int(md5(centroid_raw_id.encode()).hexdigest()[:16], 16)
 
-        # Create collection based on the first embedding
-        vector_size = len(results[0]["embedding"])
-        try:
-            collection_exists = qdrant_client.collection_exists(collection_name)
-        except Exception:
-            collection_exists = any(c.name == collection_name for c in qdrant_client.get_collections().collections)
+                centroid_payload = {
+                    "doctor_id": doctor_id,
+                    "doctor_name": doctor_name,
+                    "department": department,
+                    "profile_path": payloads[0]["profile_path"]
+                }
 
-        if not collection_exists:
-            logger.info(f"[store_multiple_images_parallel] Collection '{collection_name}' does not exist. Creating it with vector size {vector_size}...")
-            qdrant_service.create_collection(qdrant_client, collection_name, vector_size)
-            logger.info(f"[store_multiple_images_parallel] ✅ Created collection '{collection_name}' with vector size {vector_size}")
+                qdrant_service.upsert_points(
+                    settings.QDRANT_COLLECTION_CENTROIDS,
+                    vectors=[centroid_norm.tolist()],
+                    metadatas=[centroid_payload],
+                    ids=[centroid_point_id]
+                )
+                logger.info(f"Enrolled doctor {doctor_id} with {len(embeddings)} original embeddings and centroid.")
 
-        logger.info(f"[store_multiple_images_parallel] ⬆️ Uploading embeddings to Qdrant...")
-
-        start_time = time.time()
-
-
-        # Batch upload
-        batch_vectors = []
-        batch_ids = []
-        batch_meta = []
-        uploaded = 0
-
-        for item in results:
-            batch_vectors.append(item["embedding"])
-            raw_id = f"{item['doctor_id']}_{uuid.uuid4()}"
-            batch_ids.append(int(md5(raw_id.encode()).hexdigest()[:16], 16))
-            batch_meta.append({
-                "doctor_id": item["doctor_id"],
-                "doctor_name": item["doctor_name"],
-                "profile_path": os.path.abspath(item["face_path"]),
-                "facial_area": item["facial_area"]
-            })
-
-            if len(batch_vectors) >= batch_size:
-                try:
-                    qdrant_service.upsert_points(qdrant_client, collection_name, batch_vectors, batch_meta, batch_ids)
-                    uploaded += len(batch_vectors)
-                    logger.info(f"[store_multiple_images_parallel] Uploaded batch of {len(batch_vectors)}")
-                except Exception as e:
-                    logger.exception(f"[store_multiple_images_parallel] Failed to upload a batch: {e}")
-                finally:
-                    batch_vectors, batch_meta, batch_ids = [], [], []
-
-        # final upload
-        if batch_vectors:
-            try:
-                uploaded += len(batch_vectors)
-                qdrant_service.upsert_points(qdrant_client, collection_name, batch_vectors, batch_meta, batch_ids)
-            except Exception as e:
-                logger.exception(f"[store_multiple_images_parallel] Failed to upload final batch: {e}")
-
-        logger.info(f"✅ Completed — uploaded {uploaded} embeddings to Qdrant collection '{collection_name}' in {time.time() - start_time:.2f}s")
-        return uploaded
+        logger.info(f"✅ Completed bulk enrollment in {time.time() - start_time:.2f}s")
+        return uploaded_count
     except Exception as e:
         logger.exception(f"❌ [store_multiple_images_parallel] Fatal error: {e}")
         return None

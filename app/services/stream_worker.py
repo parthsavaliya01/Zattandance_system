@@ -19,6 +19,7 @@ from app.scripts.publisher_singleton import publisher as rabbitmq_publisher
 from app.core.config import settings
 from app.models.load_yolo_model import load_yolo_model
 from logging.handlers import RotatingFileHandler
+from app.core.logging_config import setup_missed_proof_logger
 
 logger = logging.getLogger(__name__)
 tz = pytz.timezone(settings.TIMEZONE)
@@ -68,6 +69,7 @@ class StreamWorker:
         self.COOLDOWN_SECONDS = 300  # Increased to avoid re-firing if track breaks and reconnects
 
         self.logger = logging.getLogger(f"camera.{camera_id}.worker")
+        self.missed_proof_logger = setup_missed_proof_logger(camera_id)
         self.BASE_OUTPUT_DIR = "outputs"
 
         # ── Output directories ────────────────────────────────────────────
@@ -427,10 +429,13 @@ class StreamWorker:
                 # Initialize state for this track if new
                 if track_id not in self.track_states:
                     self.track_states[track_id] = {
-                        "doctor_votes": {},
-                        "frames_processed": 0,
+                        "consecutive_doctor_id": None,
+                        "consecutive_timestamps": [],
                         "attendance_fired": False,
-                        "last_seen": current_time
+                        "last_seen": current_time,
+                        "blurry_saved": False,
+                        "invalid_angle_saved": False,
+                        "low_score_saved": False
                     }
                 
                 state = self.track_states[track_id]
@@ -438,6 +443,10 @@ class StreamWorker:
 
                 failure_reason = item.get("failure_reason")
                 if failure_reason == "blurry":
+                    if not state.get("blurry_saved"):
+                        blur_score = item.get("blur_score", 0.0)
+                        self._save_missed_proof(frame, yolo_area, "blurry", f"{blur_score:.2f}")
+                        state["blurry_saved"] = True
                     continue
 
                 # ── GPU OPTIMIZATION: Skip AdaFace if this track is already confirmed ──
@@ -461,52 +470,59 @@ class StreamWorker:
 
                 # ── stage 5: facial area validation ──────────────────────
                 if not self.is_valid_facial_area(area):
+                    if not state.get("invalid_angle_saved"):
+                        self._save_missed_proof(frame, yolo_area, "invalid_angle", "0.00")
+                        state["invalid_angle_saved"] = True
                     continue
 
                 # ── stage 6: Qdrant vector search ─────────────────────────
                 results = self.search_engine.search(embedding.tolist())
 
                 if not results:
+                    # Verification failed / Reset temporal consistency
+                    state["consecutive_doctor_id"] = None
+                    state["consecutive_timestamps"] = []
+                    if not state.get("low_score_saved"):
+                        cand_name, cand_score = self.search_engine.search_candidate(embedding)
+                        self._save_missed_proof(frame, yolo_area, "low_score", f"{cand_score:.3f}", cand_name)
+                        state["low_score_saved"] = True
                     continue
 
                 top         = results[0]
-                score       = top["score"]
+                score       = top["score"] # This is the average similarity of the 5 embeddings
                 payload     = top.get("payload", {})
                 doctor_id   = payload.get("doctor_id")
                 doctor_name = payload.get("doctor_name", "Unknown")
 
-                if score < MARGINAL_LOW or not doctor_id:
+                if not doctor_id:
+                    state["consecutive_doctor_id"] = None
+                    state["consecutive_timestamps"] = []
                     continue
 
-                # Record vote
-                votes = self.track_states[track_id]["doctor_votes"]
-                if doctor_id not in votes:
-                    votes[doctor_id] = []
-                votes[doctor_id].append(score)
-                self.track_states[track_id]["frames_processed"] += 1
+                # ── stage 7: temporal consistency ─────────────────────────
+                consec_frames = settings.CONSECUTIVE_FRAMES if hasattr(settings, "CONSECUTIVE_FRAMES") else 3
+                consec_window = settings.CONSECUTIVE_TIME_WINDOW if hasattr(settings, "CONSECUTIVE_TIME_WINDOW") else 3.0
 
-                # ── stage 7: attendance thresholds ───────────────────────
-                recent_scores = votes[doctor_id]
-                top_scores = sorted(recent_scores, reverse=True)[:5] # Average up to top 5 frames
-                avg_score = sum(top_scores) / len(top_scores)
-                max_score = top_scores[0]
-                
-                passed_attendance = False
-                
-                # Rule 1: 2+ frames, best frame >= INITIAL_THRESHOLD, average of top scores >= CONFIRMED_AVG_THRESHOLD
-                if len(recent_scores) >= 2 and max_score >= SINGLE_FRAME_THRESHOLD and avg_score >= CONFIRMED_AVG_THRESHOLD:
-                    passed_attendance = True
-                    
-                # Rule 2: 3+ consistent frames with average >= INITIAL_THRESHOLD
-                elif len(recent_scores) >= 3 and avg_score >= SINGLE_FRAME_THRESHOLD:
-                    passed_attendance = True
+                if state["consecutive_doctor_id"] == doctor_id:
+                    state["consecutive_timestamps"].append(current_time)
+                else:
+                    state["consecutive_doctor_id"] = doctor_id
+                    state["consecutive_timestamps"] = [current_time]
 
-                if not passed_attendance:
+                # Keep only timestamps within window
+                state["consecutive_timestamps"] = [
+                    t for t in state["consecutive_timestamps"]
+                    if current_time - t <= consec_window
+                ]
+
+                if len(state["consecutive_timestamps"]) < consec_frames:
                     continue
 
                 # Special strict rule for Nancy Amin
                 if "nancy amin" in doctor_name.lower():
-                    if avg_score < 0.42:
+                    if score < 0.42:
+                        state["consecutive_doctor_id"] = None
+                        state["consecutive_timestamps"] = []
                         continue
 
                 # ── stage 8: global cooldown check ────────────────────────
@@ -517,6 +533,8 @@ class StreamWorker:
                     if elapsed_since < self.COOLDOWN_SECONDS:
                         # Already fired recently. Just mark track as done to save GPU.
                         self.track_states[track_id]["attendance_fired"] = True
+                        state["consecutive_doctor_id"] = None
+                        state["consecutive_timestamps"] = []
                         self.logger.info(
                             f"[COOLDOWN] {doctor_name} fired {elapsed_since:.0f}s ago "
                             f"— skipping track {track_id} (cooldown={self.COOLDOWN_SECONDS}s)"
@@ -531,18 +549,18 @@ class StreamWorker:
 
                 self.logger.info(
                     f"✅ [{self.camera_id}] ATTENDANCE FIRED — Track {track_id} "
-                    f"doctor={doctor_name} avg_score={avg_score:.4f} time={elapsed:.2f}s"
+                    f"doctor={doctor_name} avg_score={score:.4f} time={elapsed:.2f}s"
                 )
 
                 # Save recognised face to outputs/recognized/
                 ts    = now.strftime("%Y%m%d_%H%M%S")
-                fname = f"{self.camera_id}_{doctor_id}_{avg_score:.3f}_{ts}.jpg"
+                fname = f"{self.camera_id}_{doctor_id}_{score:.3f}_{ts}.jpg"
                 recog_path = os.path.join(self.recognized_dir, fname)
                 if self._save_face_crop(frame, area, recog_path):
                     self.logger.info(f"[RECOGNIZED] saved → {fname}")
 
                 self._handle_detection(
-                    frame, yolo_area, doctor_id, doctor_name, avg_score, now
+                    frame, yolo_area, doctor_id, doctor_name, score, now
                 )
 
             except Exception:
@@ -595,6 +613,42 @@ class StreamWorker:
         }
         self.rabbitmq_publisher.publish(event)
         self.logger.info(f"[{self.camera_id}] Recognised {doctor_name} (score={score:.3f})")
+
+    def _save_missed_proof(self, frame, area, category, value_str, name="Unknown"):
+        try:
+            now = datetime.now(tz)
+            date_str = now.strftime("%Y%m%d")
+            time_str = now.strftime("%H%M%S")
+            
+            target_dir = os.path.join(self.BASE_OUTPUT_DIR, "missed_proofs", date_str, category)
+            os.makedirs(target_dir, exist_ok=True)
+            
+            safe_name = name.replace(" ", "_")
+            if category == "low_score":
+                filename = f"{date_str}_{time_str}_SCORE-{value_str}_{safe_name}_cam{self.camera_id}.jpg"
+            elif category == "blurry":
+                filename = f"{date_str}_{time_str}_var-{value_str}_Unknown_cam{self.camera_id}.jpg"
+            else:
+                filename = f"{date_str}_{time_str}_angle-check_Unknown_cam{self.camera_id}.jpg"
+                
+            save_path = os.path.join(target_dir, filename)
+            
+            x, y, w, h = area["x"], area["y"], area["w"], area["h"]
+            H, W = frame.shape[:2]
+            
+            pad_w = int(w * 0.4)
+            pad_h = int(h * 0.4)
+            
+            x1 = max(0, x - pad_w)
+            y1 = max(0, y - pad_h)
+            x2 = min(W, x + w + pad_w)
+            y2 = min(H, y + h + pad_h)
+            
+            if x1 < x2 and y1 < y2:
+                cv2.imwrite(save_path, frame[y1:y2, x1:x2])
+                self.missed_proof_logger.info(f"[MISSED PROOF] saved ({category}) → {filename}")
+        except Exception as e:
+            self.missed_proof_logger.error(f"[MISSED PROOF] failed to save: {e}")
 
     def _heartbeat(self):
         while not self.stop_event.is_set():

@@ -79,4 +79,3 @@ volumes:
   rabbitmq_data:
   # mysql_data:
   qdrant_data:
-

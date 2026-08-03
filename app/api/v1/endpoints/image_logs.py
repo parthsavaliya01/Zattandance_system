@@ -21,7 +21,7 @@ def get_doctor_mapping():
         q = QdrantService()
         client = q.connect()
         res, _ = client.scroll(
-            collection_name=settings.QDRANT_COLLECTION_NAME, 
+            collection_name=settings.QDRANT_COLLECTION_CENTROIDS, 
             with_payload=True, 
             limit=10000
         )

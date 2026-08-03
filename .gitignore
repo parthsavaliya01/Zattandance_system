@@ -45,8 +45,8 @@ mysql_data/
 rabbitmq_data/
 
 # --- Media & Temporary Outputs ---
-recordings
-outputs
+recordings/
+outputs/
 uploads
 test_output/
 debug_faces/
