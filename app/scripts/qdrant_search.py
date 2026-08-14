@@ -27,7 +27,7 @@ class QdrantSearchEngine:
             logger.error(traceback.format_exc())
             self.client = None
 
-    def search(self, embedding, limit=None):
+    def search(self, embedding, limit=None, expected_doctor_id: str = None):
         try:
             if embedding is None:
                 logger.warning("[QDRANT] Received None embedding for search")
@@ -44,9 +44,8 @@ class QdrantSearchEngine:
                 logger.error("[QDRANT] Invalid embedding format")
                 return []
             
-            top_k = settings.TOP_K if hasattr(settings, "TOP_K") else 3
-            centroid_threshold = settings.CENTROID_THRESHOLD if hasattr(settings, "CENTROID_THRESHOLD") else 0.35
-            verification_threshold = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.38
+            top_k = settings.TOP_K if hasattr(settings, "TOP_K") else 5
+            verification_threshold_global = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.38
 
             # Step 1: Search ONLY doctor_centroids
             result = self.client.query_points(
@@ -55,11 +54,41 @@ class QdrantSearchEngine:
                 limit=top_k
             )
 
+            # Log Stage 1 candidate ranks and scores
+            if settings.TELEMETRY_LOGGING_ENABLED:
+                logger.info(f"[STAGE 1 CENTROID] Query returned {len(result.points)} candidates (top_k={top_k}):")
+                for rank, r in enumerate(result.points, 1):
+                    payload = r.payload or {}
+                    logger.info(f"  Rank {rank}: doctor_id={payload.get('doctor_id')}, name={payload.get('doctor_name')}, centroid_score={r.score:.4f}")
+
+            # Telemetry for expected doctor if not in top_k
+            if expected_doctor_id and not any((r.payload or {}).get("doctor_id") == expected_doctor_id for r in result.points):
+                from qdrant_client.http import models
+                specific_res, _ = self.client.scroll(
+                    collection_name=settings.QDRANT_COLLECTION_CENTROIDS,
+                    scroll_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="doctor_id",
+                                match=models.MatchValue(value=expected_doctor_id)
+                            )
+                        ]
+                    ),
+                    limit=1
+                )
+                if specific_res and specific_res[0].vector is not None:
+                    # Specific centroid score is cosine similarity = dot product of normalized vectors
+                    specific_score = float(np.dot(np.array(embedding), np.array(specific_res[0].vector)))
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        logger.info(f"[STAGE 1 CENTROID] Expected doctor {expected_doctor_id} was NOT in top_k. Centroid score: {specific_score:.4f}")
+                else:
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        logger.info(f"[STAGE 1 CENTROID] Expected doctor {expected_doctor_id} has no centroid registered.")
+
+            verified_candidates = []
+
             for r in result.points:
                 centroid_score = r.score
-                if centroid_score < centroid_threshold:
-                    continue
-                
                 payload = r.payload or {}
                 doctor_id = payload.get("doctor_id")
                 doctor_name = payload.get("doctor_name", "Unknown")
@@ -87,18 +116,54 @@ class QdrantSearchEngine:
                 for emb_r in emb_results:
                     if emb_r.vector is not None:
                         sim = np.dot(np.array(embedding), np.array(emb_r.vector))
-                        similarities.append(sim)
+                        similarities.append(float(sim))
                 
                 if not similarities:
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        logger.info(f"[STAGE 2 VERIFICATION] Doctor {doctor_id} ({doctor_name}): No enrollment embeddings found.")
                     continue
                 
+                # Retrieve adaptive threshold if enabled, else use global threshold
+                if settings.ADAPTIVE_THRESHOLD_ENABLED:
+                    adaptive_t = payload.get("adaptive_threshold")
+                    if adaptive_t is not None:
+                        verification_threshold = adaptive_t
+                        is_adaptive = "Enabled"
+                        has_calibration = True
+                        spread_val = payload.get("intra_doctor_spread")
+                    else:
+                        verification_threshold = verification_threshold_global
+                        is_adaptive = "Enabled (Fallback to Global)"
+                        has_calibration = False
+                        spread_val = None
+                else:
+                    verification_threshold = verification_threshold_global
+                    is_adaptive = "Disabled"
+                    has_calibration = False
+                    spread_val = None
+
                 avg_sim = sum(similarities) / len(similarities)
                 count_exceeded = sum(1 for s in similarities if s >= verification_threshold)
                 
-                # Step 3: Verification rules
-                if avg_sim >= verification_threshold or count_exceeded >= 3:
-                    # Verified! Return this doctor
-                    return [{
+                # Verification rules
+                passed = (avg_sim >= verification_threshold or count_exceeded >= 3)
+                
+                # Log Stage 2 results
+                if settings.TELEMETRY_LOGGING_ENABLED or passed:
+                    calibration_status = "Calibration Exists" if has_calibration else "No Calibration (Fallback to Global)"
+                    spread_str = f", Spread: {spread_val:.4f}" if spread_val is not None else ""
+                    logger.info(
+                        f"[STAGE 2 VERIFICATION] Doctor: {doctor_name} ({doctor_id}). "
+                        f"5 similarities: {[round(s, 4) for s in similarities]}. "
+                        f"Average similarity: {avg_sim:.4f}. "
+                        f"Count >= threshold: {count_exceeded}. "
+                        f"Verification threshold: {verification_threshold:.4f} (Adaptive: {is_adaptive}, Status: {calibration_status}{spread_str}). "
+                        f"Passed: {passed}."
+                    )
+
+                if passed and not verified_candidates:
+                    # Keep the first verified candidate to return
+                    verified_candidates.append({
                         "id": r.id,
                         "score": avg_sim,
                         "payload": {
@@ -109,9 +174,79 @@ class QdrantSearchEngine:
                             "avg_similarity": avg_sim,
                             "count_exceeded": count_exceeded
                         }
-                    }]
+                    })
 
-            return []
+            # Stage 2 logging for expected doctor if not shortlisted in Stage 1
+            if expected_doctor_id and not any((r.payload or {}).get("doctor_id") == expected_doctor_id for r in result.points):
+                from qdrant_client.http import models
+                emb_results_exp, _ = self.client.scroll(
+                    collection_name=settings.QDRANT_COLLECTION_EMBEDDINGS,
+                    scroll_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="doctor_id",
+                                match=models.MatchValue(value=expected_doctor_id)
+                            )
+                        ]
+                    ),
+                    with_vectors=True,
+                    limit=100
+                )
+                similarities_exp = []
+                for emb_r in emb_results_exp:
+                    if emb_r.vector is not None:
+                        sim = np.dot(np.array(embedding), np.array(emb_r.vector))
+                        similarities_exp.append(float(sim))
+                
+                if similarities_exp:
+                    specific_res_exp, _ = self.client.scroll(
+                        collection_name=settings.QDRANT_COLLECTION_CENTROIDS,
+                        scroll_filter=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="doctor_id",
+                                    match=models.MatchValue(value=expected_doctor_id)
+                                )
+                            ]
+                        ),
+                        limit=1
+                    )
+                    payload_exp = specific_res_exp[0].payload or {} if specific_res_exp else {}
+                    if settings.ADAPTIVE_THRESHOLD_ENABLED:
+                        adaptive_t_exp = payload_exp.get("adaptive_threshold")
+                        if adaptive_t_exp is not None:
+                            verification_threshold_exp = adaptive_t_exp
+                            is_adaptive_exp = "Enabled"
+                            has_calibration_exp = True
+                            spread_val_exp = payload_exp.get("intra_doctor_spread")
+                        else:
+                            verification_threshold_exp = verification_threshold_global
+                            is_adaptive_exp = "Enabled (Fallback to Global)"
+                            has_calibration_exp = False
+                            spread_val_exp = None
+                    else:
+                        verification_threshold_exp = verification_threshold_global
+                        is_adaptive_exp = "Disabled"
+                        has_calibration_exp = False
+                        spread_val_exp = None
+                    
+                    avg_sim_exp = sum(similarities_exp) / len(similarities_exp)
+                    count_exceeded_exp = sum(1 for s in similarities_exp if s >= verification_threshold_exp)
+                    passed_exp = (avg_sim_exp >= verification_threshold_exp or count_exceeded_exp >= 3)
+                    
+                    if settings.TELEMETRY_LOGGING_ENABLED or passed_exp:
+                        calibration_status_exp = "Calibration Exists" if has_calibration_exp else "No Calibration (Fallback to Global)"
+                        spread_str_exp = f", Spread: {spread_val_exp:.4f}" if spread_val_exp is not None else ""
+                        logger.info(
+                            f"[STAGE 2 VERIFICATION] Expected Doctor (NOT IN SHORTLIST): {expected_doctor_id}. "
+                            f"5 similarities: {[round(s, 4) for s in similarities_exp]}. "
+                            f"Average similarity: {avg_sim_exp:.4f}. "
+                            f"Count >= threshold: {count_exceeded_exp}. "
+                            f"Verification threshold: {verification_threshold_exp:.4f} (Adaptive: {is_adaptive_exp}, Status: {calibration_status_exp}{spread_str_exp}). "
+                            f"Passed: {passed_exp}."
+                        )
+
+            return verified_candidates
         
         except ResponseHandlingException:
             logger.error("[QDRANT] Connection dropped, reconnecting")

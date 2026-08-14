@@ -435,7 +435,8 @@ class StreamWorker:
                         "last_seen": current_time,
                         "blurry_saved": False,
                         "invalid_angle_saved": False,
-                        "low_score_saved": False
+                        "low_score_saved": False,
+                        "saved_missed_proof_paths": []
                     }
                 
                 state = self.track_states[track_id]
@@ -445,7 +446,9 @@ class StreamWorker:
                 if failure_reason == "blurry":
                     if not state.get("blurry_saved"):
                         blur_score = item.get("blur_score", 0.0)
-                        self._save_missed_proof(frame, yolo_area, "blurry", f"{blur_score:.2f}")
+                        saved_path = self._save_missed_proof(frame, yolo_area, "blurry", f"{blur_score:.2f}")
+                        if saved_path:
+                            state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["blurry_saved"] = True
                     continue
 
@@ -456,7 +459,7 @@ class StreamWorker:
                 start_time = time.time()
 
                 # ── stage 4: InsightFace SCRFD + AdaFace embed ────────────
-                faces = extract_face_embedding(frame, yolo_area=yolo_area)
+                faces = extract_face_embedding(frame, yolo_area=yolo_area, track_id=track_id)
 
                 if not faces:
                     continue
@@ -471,7 +474,9 @@ class StreamWorker:
                 # ── stage 5: facial area validation ──────────────────────
                 if not self.is_valid_facial_area(area):
                     if not state.get("invalid_angle_saved"):
-                        self._save_missed_proof(frame, yolo_area, "invalid_angle", "0.00")
+                        saved_path = self._save_missed_proof(frame, yolo_area, "invalid_angle", "0.00")
+                        if saved_path:
+                            state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["invalid_angle_saved"] = True
                     continue
 
@@ -482,9 +487,26 @@ class StreamWorker:
                     # Verification failed / Reset temporal consistency
                     state["consecutive_doctor_id"] = None
                     state["consecutive_timestamps"] = []
+                    
+                    if "history" not in state:
+                        state["history"] = []
+                    state["history"].append(None)
+                    if len(state["history"]) > (settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6):
+                        state["history"].pop(0)
+
+                    # Log the miss and current buffer state
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        history_str = [str(x) if x is not None else "Unknown" for x in state["history"]]
+                        self.logger.info(
+                            f"[MULTI-FRAME MISS] Track {track_id} failed verification on this frame. "
+                            f"Recent buffer contents: {history_str}. Mode: {settings.MULTI_FRAME_MODE if hasattr(settings, 'MULTI_FRAME_MODE') else 'consecutive'}"
+                        )
+
                     if not state.get("low_score_saved"):
                         cand_name, cand_score = self.search_engine.search_candidate(embedding)
-                        self._save_missed_proof(frame, yolo_area, "low_score", f"{cand_score:.3f}", cand_name)
+                        saved_path = self._save_missed_proof(frame, yolo_area, "low_score", f"{cand_score:.3f}", cand_name)
+                        if saved_path:
+                            state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["low_score_saved"] = True
                     continue
 
@@ -494,43 +516,85 @@ class StreamWorker:
                 doctor_id   = payload.get("doctor_id")
                 doctor_name = payload.get("doctor_name", "Unknown")
 
-<<<<<<< HEAD
-                if not doctor_id:
+                if score < MARGINAL_LOW or not doctor_id:
                     state["consecutive_doctor_id"] = None
                     state["consecutive_timestamps"] = []
-=======
-                if score < MARGINAL_LOW or not doctor_id:
+                    
+                    if "history" not in state:
+                        state["history"] = []
+                    state["history"].append(None)
+                    if len(state["history"]) > (settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6):
+                        state["history"].pop(0)
+
+                    # Log the miss and current buffer state
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        history_str = [str(x) if x is not None else "Unknown" for x in state["history"]]
+                        self.logger.info(
+                            f"[MULTI-FRAME MISS] Track {track_id} had score < MARGINAL_LOW or no doctor_id on this frame. "
+                            f"Recent buffer contents: {history_str}. Mode: {settings.MULTI_FRAME_MODE if hasattr(settings, 'MULTI_FRAME_MODE') else 'consecutive'}"
+                        )
+
                     if not state.get("low_score_saved"):
                         name_to_save = doctor_name if (doctor_id and doctor_name) else "Unknown"
-                        self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", name_to_save)
+                        saved_path = self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", name_to_save)
+                        if saved_path:
+                            state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["low_score_saved"] = True
->>>>>>> Development
                     continue
 
                 # ── stage 7: temporal consistency ─────────────────────────
-                consec_frames = settings.CONSECUTIVE_FRAMES if hasattr(settings, "CONSECUTIVE_FRAMES") else 3
+                multi_frame_mode = settings.MULTI_FRAME_MODE if hasattr(settings, "MULTI_FRAME_MODE") else "consecutive"
+                frame_buffer_size = settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6
+                min_matches = settings.MIN_MATCHES if hasattr(settings, "MIN_MATCHES") else 3
+                min_consecutive_matches = settings.MIN_CONSECUTIVE_MATCHES if hasattr(settings, "MIN_CONSECUTIVE_MATCHES") else 3
                 consec_window = settings.CONSECUTIVE_TIME_WINDOW if hasattr(settings, "CONSECUTIVE_TIME_WINDOW") else 3.0
 
-                if state["consecutive_doctor_id"] == doctor_id:
-                    state["consecutive_timestamps"].append(current_time)
+                passed_attendance = False
+
+                if "history" not in state:
+                    state["history"] = []
+
+                # Add to history
+                state["history"].append(doctor_id)
+                if len(state["history"]) > frame_buffer_size:
+                    state["history"].pop(0)
+
+                if multi_frame_mode == "majority":
+                    # Count occurrences of this doctor_id in the history
+                    match_count = sum(1 for x in state["history"] if x == doctor_id)
+                    if match_count >= min_matches:
+                        passed_attendance = True
                 else:
-                    state["consecutive_doctor_id"] = doctor_id
-                    state["consecutive_timestamps"] = [current_time]
+                    # Strict consecutive match
+                    if state.get("consecutive_doctor_id") == doctor_id:
+                        state["consecutive_timestamps"].append(current_time)
+                    else:
+                        state["consecutive_doctor_id"] = doctor_id
+                        state["consecutive_timestamps"] = [current_time]
 
-<<<<<<< HEAD
-                # Keep only timestamps within window
-                state["consecutive_timestamps"] = [
-                    t for t in state["consecutive_timestamps"]
-                    if current_time - t <= consec_window
-                ]
+                    # Keep only timestamps within window
+                    state["consecutive_timestamps"] = [
+                        t for t in state["consecutive_timestamps"]
+                        if current_time - t <= consec_window
+                    ]
 
-                if len(state["consecutive_timestamps"]) < consec_frames:
-=======
+                    if len(state["consecutive_timestamps"]) >= min_consecutive_matches:
+                        passed_attendance = True
+
                 if not passed_attendance:
+                    # Log the miss and current buffer state
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        history_str = [str(x) if x is not None else "Unknown" for x in state["history"]]
+                        self.logger.info(
+                            f"[MULTI-FRAME MISS] Track {track_id} verification passed for {doctor_name}, but temporal check failed. "
+                            f"Recent buffer contents: {history_str}. Mode: {multi_frame_mode}"
+                        )
+                    
                     if not state.get("low_score_saved"):
-                        self._save_missed_proof(frame, yolo_area, "low_score", f"{avg_score:.3f}", doctor_name)
+                        saved_path = self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", doctor_name)
+                        if saved_path:
+                            state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["low_score_saved"] = True
->>>>>>> Development
                     continue
 
                 # Special strict rule for Nancy Amin
@@ -538,6 +602,8 @@ class StreamWorker:
                     if score < 0.42:
                         state["consecutive_doctor_id"] = None
                         state["consecutive_timestamps"] = []
+                        if "history" in state:
+                            state["history"] = []
                         continue
 
                 # ── stage 8: global cooldown check ────────────────────────
@@ -559,6 +625,15 @@ class StreamWorker:
                 # ── stage 9: fire attendance ─────────────────────────────
                 self.global_cooldown[doctor_id] = now
                 self.track_states[track_id]["attendance_fired"] = True
+
+                # Clean up any transitional missed proof files saved for this track
+                for path in state.get("saved_missed_proof_paths", []):
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                            self.logger.info(f"[MISSED PROOF CLEANUP] Deleted transitional missed proof: {path}")
+                    except Exception as e:
+                        self.logger.error(f"[MISSED PROOF CLEANUP] Failed to delete {path}: {e}")
                 
                 elapsed = time.time() - start_time
 
@@ -662,8 +737,10 @@ class StreamWorker:
             if x1 < x2 and y1 < y2:
                 cv2.imwrite(save_path, frame[y1:y2, x1:x2])
                 self.missed_proof_logger.info(f"[MISSED PROOF] saved ({category}) → {filename}")
+                return save_path
         except Exception as e:
             self.missed_proof_logger.error(f"[MISSED PROOF] failed to save: {e}")
+        return None
 
     def _heartbeat(self):
         while not self.stop_event.is_set():

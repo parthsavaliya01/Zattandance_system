@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.db.qdrant_service import QdrantService
 from app.db.mysql_db import db_connection
 from app.scripts.embeddings import extract_embedding_from_image
-from app.services.store_embedding import get_embedding_from_face
+from app.services.store_embedding import get_embedding_from_face, compute_calibration_metrics
 from app.services.gpu_worker import GPUWorker
 
 logging.basicConfig(level=logging.INFO)
@@ -171,6 +171,15 @@ def run_migration():
         centroid = np.mean(embs_arr, axis=0)
         centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
 
+        spread, adaptive_threshold = compute_calibration_metrics(embeddings)
+        
+        warning_limit = settings.INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD if hasattr(settings, "INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD") else 0.50
+        if spread < warning_limit:
+            logger.warning(
+                f"[INCONSISTENT ENROLLMENT] Doctor {doctor_id} has high embedding spread! "
+                f"Mean pairwise similarity is {spread:.4f}, below warning threshold {warning_limit}"
+            )
+
         centroid_raw_id = f"{doctor_id}_centroid"
         centroid_point_id = int(md5(centroid_raw_id.encode()).hexdigest()[:16], 16)
 
@@ -178,7 +187,9 @@ def run_migration():
             "doctor_id": doctor_id,
             "doctor_name": doctor_name,
             "department": department,
-            "profile_path": payloads[0]["profile_path"]
+            "profile_path": payloads[0]["profile_path"],
+            "intra_doctor_spread": spread,
+            "adaptive_threshold": adaptive_threshold
         }
 
         # Upload centroid
@@ -188,7 +199,7 @@ def run_migration():
             metadatas=[centroid_payload],
             ids=[centroid_point_id]
         )
-        logger.info(f"Finished migrating doctor {doctor_id}. Centroid and {len(embeddings)} embeddings uploaded.")
+        logger.info(f"Finished migrating doctor {doctor_id}. Centroid and {len(embeddings)} embeddings uploaded. Spread: {spread:.4f}, Threshold: {adaptive_threshold:.4f}")
 
     logger.info("Migration completed successfully.")
 

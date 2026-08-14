@@ -8,13 +8,14 @@ from app.services.gpu_worker import GPU_RESULT_MAP, GPU_TASK_QUEUE
 
 logger = logging.getLogger(__name__)
 
-def extract_face_embedding(frame, yolo_area: dict = None, timeout=7.0):
+def extract_face_embedding(frame, yolo_area: dict = None, timeout=7.0, track_id: int = None):
     try:
         task_id = uuid.uuid4().hex
         GPU_TASK_QUEUE.put((task_id, {
             "type": "frame",
             "data": frame,           # full BGR frame
-            "yolo_area": yolo_area   # YOLO bbox to filter results
+            "yolo_area": yolo_area,  # YOLO bbox to filter results
+            "track_id": track_id
         }))
 
         start = time.time()

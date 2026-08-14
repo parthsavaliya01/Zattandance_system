@@ -19,6 +19,31 @@ test_output/
 Doctors_Profile/
 qdrant_data/
 outputs/
+recordings/
+debug_faces/
+AdaFace/
+detected_face/
+detected_frames/
+enrollment_variants/
+frames/
+high_scores/
+infer_reviews/
+marginal_reviews/
+pending_reviews/
+recognized/
+review/
+yolo_debug/
+db_data/
+mysql_data/
+rabbitmq_data/
+qdrant_data_backup_*/
+*_backup*/
+checkpoints/
+embeddings/
+cache/
+.cache/
+tmp/
+node_modules/
 
 # Git & editor artifacts
 .git/
@@ -29,3 +54,4 @@ outputs/
 # OS files
 .DS_Store
 Thumbs.db
+

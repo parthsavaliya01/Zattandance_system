@@ -85,6 +85,35 @@ def get_doctor_details_from_db(doctor_id: str):
             conn.close()
     return {}
 
+def compute_calibration_metrics(embeddings_list):
+    """
+    Compute intra-doctor spread (mean pairwise cosine similarity) and adaptive threshold.
+    """
+    spread = 1.0
+    if len(embeddings_list) > 1:
+        similarities = []
+        for i in range(len(embeddings_list)):
+            for j in range(i + 1, len(embeddings_list)):
+                v1 = np.array(embeddings_list[i])
+                v2 = np.array(embeddings_list[j])
+                v1_norm = v1 / (np.linalg.norm(v1) + 1e-6)
+                v2_norm = v2 / (np.linalg.norm(v2) + 1e-6)
+                sim = np.dot(v1_norm, v2_norm)
+                similarities.append(float(sim))
+        spread = sum(similarities) / len(similarities)
+
+    # Compute adaptive threshold
+    alpha = settings.ADAPTIVE_THRESHOLD_ALPHA if hasattr(settings, "ADAPTIVE_THRESHOLD_ALPHA") else 0.1
+    min_t = settings.MIN_ADAPTIVE_THRESHOLD if hasattr(settings, "MIN_ADAPTIVE_THRESHOLD") else 0.32
+    max_t = settings.MAX_ADAPTIVE_THRESHOLD if hasattr(settings, "MAX_ADAPTIVE_THRESHOLD") else 0.40
+    global_t = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.38
+    
+    adaptive_threshold = global_t - alpha * (1.0 - spread)
+    adaptive_threshold = max(min_t, min(adaptive_threshold, max_t))
+    
+    return float(spread), float(adaptive_threshold)
+
+
 def store_single_image(face_path: str,
                        doctor_id: str,
                        doctor_name: str,
@@ -198,6 +227,15 @@ def store_single_image(face_path: str,
             centroid = np.mean(embs_arr, axis=0)
             centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
 
+            spread, adaptive_threshold = compute_calibration_metrics(embeddings_list)
+            
+            warning_limit = settings.INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD if hasattr(settings, "INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD") else 0.50
+            if spread < warning_limit:
+                logger.warning(
+                    f"[INCONSISTENT ENROLLMENT] Doctor {doctor_id} has high embedding spread! "
+                    f"Mean pairwise similarity is {spread:.4f}, below warning threshold {warning_limit}"
+                )
+
             centroid_raw_id = f"{doctor_id}_centroid"
             centroid_point_id = int(md5(centroid_raw_id.encode()).hexdigest()[:16], 16)
 
@@ -205,7 +243,9 @@ def store_single_image(face_path: str,
                 "doctor_id": doctor_id,
                 "doctor_name": real_doctor_name,
                 "department": department,
-                "profile_path": os.path.abspath(face_path)
+                "profile_path": os.path.abspath(face_path),
+                "intra_doctor_spread": spread,
+                "adaptive_threshold": adaptive_threshold
             }
 
             qdrant_service.upsert_points(
@@ -214,7 +254,7 @@ def store_single_image(face_path: str,
                 metadatas=[centroid_payload],
                 ids=[centroid_point_id]
             )
-            logger.info(f"[store_single_image] Successfully updated centroid for doctor {doctor_id}")
+            logger.info(f"[store_single_image] Successfully updated centroid for doctor {doctor_id} with spread {spread:.4f} and adaptive threshold {adaptive_threshold:.4f}")
 
         return 1
     except Exception as e:
@@ -344,6 +384,15 @@ def store_multiple_images_parallel(root_dir: str,
                 centroid = np.mean(embs_arr, axis=0)
                 centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
 
+                spread, adaptive_threshold = compute_calibration_metrics(embeddings)
+
+                warning_limit = settings.INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD if hasattr(settings, "INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD") else 0.50
+                if spread < warning_limit:
+                    logger.warning(
+                        f"[INCONSISTENT ENROLLMENT] Doctor {doctor_id} has high embedding spread! "
+                        f"Mean pairwise similarity is {spread:.4f}, below warning threshold {warning_limit}"
+                    )
+
                 centroid_raw_id = f"{doctor_id}_centroid"
                 centroid_point_id = int(md5(centroid_raw_id.encode()).hexdigest()[:16], 16)
 
@@ -351,7 +400,9 @@ def store_multiple_images_parallel(root_dir: str,
                     "doctor_id": doctor_id,
                     "doctor_name": doctor_name,
                     "department": department,
-                    "profile_path": payloads[0]["profile_path"]
+                    "profile_path": payloads[0]["profile_path"],
+                    "intra_doctor_spread": spread,
+                    "adaptive_threshold": adaptive_threshold
                 }
 
                 qdrant_service.upsert_points(
@@ -360,7 +411,7 @@ def store_multiple_images_parallel(root_dir: str,
                     metadatas=[centroid_payload],
                     ids=[centroid_point_id]
                 )
-                logger.info(f"Enrolled doctor {doctor_id} with {len(embeddings)} original embeddings and centroid.")
+                logger.info(f"Enrolled doctor {doctor_id} with {len(embeddings)} original embeddings and centroid. Spread: {spread:.4f}, Threshold: {adaptive_threshold:.4f}")
 
         logger.info(f"✅ Completed bulk enrollment in {time.time() - start_time:.2f}s")
         return uploaded_count

@@ -55,10 +55,34 @@ class Settings(BaseSettings):
     VERIFICATION_THRESHOLD: float = 0.38
     CONSECUTIVE_FRAMES: int = 3
     CONSECUTIVE_TIME_WINDOW: float = 3.0
-    TOP_K: int = 3
+    TOP_K: int = 5
     ENROLL_FRONT_ONLY: bool = False
     ENROLL_FRONT_FILENAME_KEYWORDS: str = "front_face,front_profile,front"
     ENROLL_MIN_CONF: float = 0.40
+
+    # Adaptive threshold settings
+    ADAPTIVE_THRESHOLD_ENABLED: bool = False
+    ADAPTIVE_THRESHOLD_ALPHA: float = 0.1
+    MIN_ADAPTIVE_THRESHOLD: float = 0.32
+    MAX_ADAPTIVE_THRESHOLD: float = 0.40
+    INTRA_DOCTOR_SPREAD_WARNING_THRESHOLD: float = 0.50
+    TELEMETRY_LOGGING_ENABLED: bool = False
+
+    # Multi-frame confirmation settings
+    MULTI_FRAME_MODE: str = "consecutive"  # "consecutive" or "majority"
+    FRAME_BUFFER_SIZE: int = 6
+    MIN_CONSECUTIVE_MATCHES: int = 3
+    MIN_MATCHES: int = 3
+
+    # Face quality gate settings
+    FACE_QUALITY_GATE_ENABLED: bool = False
+    FACE_QUALITY_MIN_WIDTH: int = 50
+    FACE_QUALITY_MIN_HEIGHT: int = 50
+    FACE_QUALITY_MIN_BLUR: float = 15.0
+    FACE_QUALITY_MIN_EYE_NOSE_RATIO: float = 0.20
+
+    MAX_LOG_FILE_SIZE_MB: int = 50
+
 
     @property
     def CAMERAS(self):

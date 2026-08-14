@@ -6,6 +6,7 @@ import numpy as np
 import onnxruntime as ort
 from insightface.app import FaceAnalysis
 import logging
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class GPUWorker(threading.Thread):
         norm = np.linalg.norm(raw)
         return (raw / (norm + 1e-6)).astype(np.float32)
 
-    def _process_frame(self, frame_bgr: np.ndarray, yolo_area: dict = None) -> list:
+    def _process_frame(self, frame_bgr: np.ndarray, yolo_area: dict = None, track_id: int = None) -> list:
         """
         Run InsightFace SCRFD on the FULL frame (not a crop).
         If yolo_area is provided, only keep detections that overlap
@@ -207,6 +208,48 @@ class GPUWorker(threading.Thread):
                     continue
 
             kps     = det.kps.astype(np.float32)
+
+            # ── Face Quality Gate check ──────────────────────────────
+            if settings.FACE_QUALITY_GATE_ENABLED:
+                w = x2 - x1
+                h = y2 - y1
+                
+                # 1. Size check
+                if w < settings.FACE_QUALITY_MIN_WIDTH or h < settings.FACE_QUALITY_MIN_HEIGHT:
+                    logger.info(
+                        f"[FACE-QUALITY-GATE] Skip track {track_id}: size too small ({w}x{h} < {settings.FACE_QUALITY_MIN_WIDTH}x{settings.FACE_QUALITY_MIN_HEIGHT})"
+                    )
+                    continue
+                
+                # 2. Pose check: horizontal eye-to-nose asymmetry ratio
+                left_eye = kps[0]
+                right_eye = kps[1]
+                nose = kps[2]
+                dx_left = abs(nose[0] - left_eye[0])
+                dx_right = abs(right_eye[0] - nose[0])
+                max_dx = max(dx_left, dx_right)
+                eye_nose_ratio = min(dx_left, dx_right) / max_dx if max_dx > 0 else 0.0
+                
+                if eye_nose_ratio < settings.FACE_QUALITY_MIN_EYE_NOSE_RATIO:
+                    logger.info(
+                        f"[FACE-QUALITY-GATE] Skip track {track_id}: pose too extreme (eye_nose_ratio {eye_nose_ratio:.3f} < {settings.FACE_QUALITY_MIN_EYE_NOSE_RATIO})"
+                    )
+                    continue
+                
+                # 3. Blur check
+                face_crop = frame_bgr[max(0, y1):y2, max(0, x1):x2]
+                if face_crop.size > 0:
+                    gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+                    blur_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+                else:
+                    blur_var = 0.0
+                
+                if blur_var < settings.FACE_QUALITY_MIN_BLUR:
+                    logger.info(
+                        f"[FACE-QUALITY-GATE] Skip track {track_id}: blurry (blur_var {blur_var:.2f} < {settings.FACE_QUALITY_MIN_BLUR})"
+                    )
+                    continue
+
             aligned = align_face_112(frame_bgr, kps)
             emb     = self._embed(aligned)
             area    = _build_facial_area(det.bbox.astype(int), kps)
@@ -241,9 +284,10 @@ class GPUWorker(threading.Thread):
                 ptype     = payload["type"]
                 data      = payload["data"]
                 yolo_area = payload.get("yolo_area")   # ← add this
+                track_id  = payload.get("track_id")
 
                 if ptype == "frame":
-                    faces = self._process_frame(data, yolo_area)  # ← pass it
+                    faces = self._process_frame(data, yolo_area, track_id)  # ← pass it
                 else:
                     faces = self._process_face(data)
 
