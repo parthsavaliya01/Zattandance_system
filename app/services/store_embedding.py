@@ -106,7 +106,7 @@ def compute_calibration_metrics(embeddings_list):
     alpha = settings.ADAPTIVE_THRESHOLD_ALPHA if hasattr(settings, "ADAPTIVE_THRESHOLD_ALPHA") else 0.1
     min_t = settings.MIN_ADAPTIVE_THRESHOLD if hasattr(settings, "MIN_ADAPTIVE_THRESHOLD") else 0.32
     max_t = settings.MAX_ADAPTIVE_THRESHOLD if hasattr(settings, "MAX_ADAPTIVE_THRESHOLD") else 0.40
-    global_t = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.38
+    global_t = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.36
     
     adaptive_threshold = global_t - alpha * (1.0 - spread)
     adaptive_threshold = max(min_t, min(adaptive_threshold, max_t))

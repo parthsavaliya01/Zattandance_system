@@ -215,24 +215,38 @@ class GPUWorker(threading.Thread):
                 h = y2 - y1
                 
                 # 1. Size check
-                if w < settings.FACE_QUALITY_MIN_WIDTH or h < settings.FACE_QUALITY_MIN_HEIGHT:
+                if w < settings.MIN_FACE_SIZE_PX or h < settings.MIN_FACE_SIZE_PX:
                     logger.info(
-                        f"[FACE-QUALITY-GATE] Skip track {track_id}: size too small ({w}x{h} < {settings.FACE_QUALITY_MIN_WIDTH}x{settings.FACE_QUALITY_MIN_HEIGHT})"
+                        f"[FACE-QUALITY-GATE] Track {track_id} skipped: Face size {w}x{h} is below MIN_FACE_SIZE_PX ({settings.MIN_FACE_SIZE_PX})"
                     )
                     continue
                 
-                # 2. Pose check: horizontal eye-to-nose asymmetry ratio
+                # 2. Pose/yaw check using landmarks
                 left_eye = kps[0]
                 right_eye = kps[1]
                 nose = kps[2]
-                dx_left = abs(nose[0] - left_eye[0])
-                dx_right = abs(right_eye[0] - nose[0])
-                max_dx = max(dx_left, dx_right)
-                eye_nose_ratio = min(dx_left, dx_right) / max_dx if max_dx > 0 else 0.0
                 
-                if eye_nose_ratio < settings.FACE_QUALITY_MIN_EYE_NOSE_RATIO:
+                # Vector from left eye to right eye
+                eye_vec = right_eye - left_eye
+                eye_dist = np.linalg.norm(eye_vec)
+                if eye_dist > 0:
+                    # Unit vector
+                    eye_unit = eye_vec / eye_dist
+                    # Vector from left eye to nose
+                    nose_vec = nose - left_eye
+                    # Project nose vector onto eye-to-eye axis
+                    proj_nose = np.dot(nose_vec, eye_unit)
+                    # Normalized position of nose on the eye-to-eye line
+                    nose_norm = proj_nose / eye_dist
+                    # Asymmetry (0 is perfectly centered, 0.5 is at the eye boundary)
+                    asymmetry = nose_norm - 0.5
+                    yaw_degrees = abs(asymmetry) * 90.0
+                else:
+                    yaw_degrees = 90.0  # extreme yaw if eyes overlap
+                
+                if yaw_degrees > settings.MAX_YAW_DEGREES:
                     logger.info(
-                        f"[FACE-QUALITY-GATE] Skip track {track_id}: pose too extreme (eye_nose_ratio {eye_nose_ratio:.3f} < {settings.FACE_QUALITY_MIN_EYE_NOSE_RATIO})"
+                        f"[FACE-QUALITY-GATE] Track {track_id} skipped: Estimated yaw {yaw_degrees:.1f} degrees exceeds MAX_YAW_DEGREES ({settings.MAX_YAW_DEGREES})"
                     )
                     continue
                 
@@ -244,9 +258,9 @@ class GPUWorker(threading.Thread):
                 else:
                     blur_var = 0.0
                 
-                if blur_var < settings.FACE_QUALITY_MIN_BLUR:
+                if blur_var < settings.MIN_BLUR_SCORE:
                     logger.info(
-                        f"[FACE-QUALITY-GATE] Skip track {track_id}: blurry (blur_var {blur_var:.2f} < {settings.FACE_QUALITY_MIN_BLUR})"
+                        f"[FACE-QUALITY-GATE] Track {track_id} skipped: Blur score {blur_var:.1f} is below MIN_BLUR_SCORE ({settings.MIN_BLUR_SCORE})"
                     )
                     continue
 

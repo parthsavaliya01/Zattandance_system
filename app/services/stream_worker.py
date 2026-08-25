@@ -339,6 +339,7 @@ class StreamWorker:
                         # Initialize YOLO track state
                         if tid not in self.yolo_track_states:
                             self.yolo_track_states[tid] = {
+                                "start_time": current_time,
                                 "frames_processed": 0,
                                 "small_face_buffer": [],
                                 "last_seen": current_time,
@@ -348,6 +349,12 @@ class StreamWorker:
                         y_state = self.yolo_track_states[tid]
                         y_state["last_seen"] = current_time
                         y_state["frames_processed"] += 1
+
+                        if "start_time" not in y_state:
+                            y_state["start_time"] = current_time
+
+                        if settings.MAX_TRACKING_DURATION_SECONDS > 0 and current_time - y_state["start_time"] > settings.MAX_TRACKING_DURATION_SECONDS:
+                            continue
                         
                         # Size-Gated Queuing & Buffering
                         if pixel_area < MIN_FACE_AREA_FOR_INFERENCE:
@@ -429,6 +436,7 @@ class StreamWorker:
                 # Initialize state for this track if new
                 if track_id not in self.track_states:
                     self.track_states[track_id] = {
+                        "start_time": current_time,
                         "consecutive_doctor_id": None,
                         "consecutive_timestamps": [],
                         "attendance_fired": False,
@@ -441,6 +449,12 @@ class StreamWorker:
                 
                 state = self.track_states[track_id]
                 state["last_seen"] = current_time
+
+                if "start_time" not in state:
+                    state["start_time"] = current_time
+
+                if settings.MAX_TRACKING_DURATION_SECONDS > 0 and current_time - state["start_time"] > settings.MAX_TRACKING_DURATION_SECONDS:
+                    continue
 
                 failure_reason = item.get("failure_reason")
                 if failure_reason == "blurry":

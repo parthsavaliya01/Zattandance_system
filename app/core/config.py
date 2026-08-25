@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_CENTROIDS: str = 'doctor_centroids'
     QDRANT_COLLECTION_EMBEDDINGS: str = 'doctor_embeddings'
     CENTROID_THRESHOLD: float = 0.35
-    VERIFICATION_THRESHOLD: float = 0.38
+    VERIFICATION_THRESHOLD: float = 0.36
     CONSECUTIVE_FRAMES: int = 3
     CONSECUTIVE_TIME_WINDOW: float = 3.0
     TOP_K: int = 5
@@ -76,10 +76,10 @@ class Settings(BaseSettings):
 
     # Face quality gate settings
     FACE_QUALITY_GATE_ENABLED: bool = False
-    FACE_QUALITY_MIN_WIDTH: int = 50
-    FACE_QUALITY_MIN_HEIGHT: int = 50
-    FACE_QUALITY_MIN_BLUR: float = 15.0
-    FACE_QUALITY_MIN_EYE_NOSE_RATIO: float = 0.20
+    MIN_FACE_SIZE_PX: int = 50
+    MAX_YAW_DEGREES: float = 30.0
+    MIN_BLUR_SCORE: float = 15.0
+    MAX_TRACKING_DURATION_SECONDS: float = 0.0
 
     MAX_LOG_FILE_SIZE_MB: int = 50
 

@@ -27,7 +27,7 @@ class QdrantSearchEngine:
             logger.error(traceback.format_exc())
             self.client = None
 
-    def search(self, embedding, limit=None, expected_doctor_id: str = None):
+    def search(self, embedding, limit=5, expected_doctor_id: str = None):
         try:
             if embedding is None:
                 logger.warning("[QDRANT] Received None embedding for search")
@@ -39,13 +39,13 @@ class QdrantSearchEngine:
             
             if isinstance(embedding, np.ndarray):
                 embedding = embedding.flatten().tolist()
-
+            
             if not isinstance(embedding, list) or len(embedding) == 0:
                 logger.error("[QDRANT] Invalid embedding format")
                 return []
             
-            top_k = settings.TOP_K if hasattr(settings, "TOP_K") else 5
-            verification_threshold_global = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.38
+            top_k = limit if limit is not None else (settings.TOP_K if hasattr(settings, "TOP_K") else 5)
+            verification_threshold_global = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.36
 
             # Step 1: Search ONLY doctor_centroids
             result = self.client.query_points(
