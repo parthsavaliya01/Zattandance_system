@@ -35,7 +35,7 @@ def get_missed_proofs():
                 score = "N/A"
                 name = "N/A"
                 
-                if category == "low_score":
+                if category in ["low_score", "unconfirmed"]:
                     parts = filename.split("_")
                     for p in parts:
                         if p.startswith("SCORE-"):

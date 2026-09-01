@@ -595,6 +595,40 @@ class StreamWorker:
                     if len(state["consecutive_timestamps"]) >= min_consecutive_matches:
                         passed_attendance = True
 
+                # Log final decision on the track (only once when firing or when first saving/skipping missed proof)
+                should_log_decision = False
+                if passed_attendance:
+                    should_log_decision = True
+                elif not state.get("low_score_saved"):
+                    should_log_decision = True
+
+                if should_log_decision:
+                    threshold = settings.VERIFICATION_THRESHOLD
+                    temporal_status = "PASS" if passed_attendance else "FAIL"
+                    final_recog = "ACCEPT" if passed_attendance else "REJECT"
+                    
+                    if passed_attendance:
+                        proof_decision = "SUCCESS"
+                        reason = "Temporal and similarity checks passed"
+                    elif score < threshold:
+                        proof_decision = "MISSED"
+                        reason = "Similarity score below threshold"
+                    else:
+                        proof_decision = "SKIP"
+                        reason = "Similarity passed, but temporal check failed"
+
+                    self.logger.info(
+                        f"[FACE_ATTENDANCE]\n"
+                        f"Doctor: {doctor_name}\n"
+                        f"Raw Score: {score:.4f}\n"
+                        f"Acceptance Threshold: {threshold:.4f}\n"
+                        f"Verification: PASS\n"
+                        f"Temporal: {temporal_status}\n"
+                        f"Attendance Decision: {final_recog}\n"
+                        f"Missed Proof Decision: {'YES' if proof_decision == 'MISSED' else 'NO'}\n"
+                        f"Reason: {reason}"
+                    )
+
                 if not passed_attendance:
                     # Log the miss and current buffer state
                     if settings.TELEMETRY_LOGGING_ENABLED:
@@ -605,7 +639,8 @@ class StreamWorker:
                         )
                     
                     if not state.get("low_score_saved"):
-                        saved_path = self._save_missed_proof(frame, yolo_area, "low_score", f"{score:.3f}", doctor_name)
+                        category = "unconfirmed" if score >= settings.VERIFICATION_THRESHOLD else "low_score"
+                        saved_path = self._save_missed_proof(frame, yolo_area, category, f"{score:.3f}", doctor_name)
                         if saved_path:
                             state["saved_missed_proof_paths"] = state.get("saved_missed_proof_paths", []) + [saved_path]
                         state["low_score_saved"] = True
@@ -728,7 +763,7 @@ class StreamWorker:
             os.makedirs(target_dir, exist_ok=True)
             
             safe_name = name.replace(" ", "_")
-            if category == "low_score":
+            if category in ["low_score", "unconfirmed"]:
                 filename = f"{date_str}_{time_str}_SCORE-{value_str}_{safe_name}_cam{self.camera_id}.jpg"
             elif category == "blurry":
                 filename = f"{date_str}_{time_str}_var-{value_str}_Unknown_cam{self.camera_id}.jpg"

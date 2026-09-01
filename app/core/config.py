@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     MIN_BLUR_SCORE: float = 15.0
     MAX_TRACKING_DURATION_SECONDS: float = 0.0
 
-    MAX_LOG_FILE_SIZE_MB: int = 50
+    MAX_LOG_FILE_SIZE_MB: int = 10
 
 
     @property
