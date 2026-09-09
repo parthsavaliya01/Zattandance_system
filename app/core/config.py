@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_EMBEDDINGS: str = 'doctor_embeddings'
     CENTROID_THRESHOLD: float = 0.35
     VERIFICATION_THRESHOLD: float = 0.36
-    CONSECUTIVE_FRAMES: int = 3
+    CONSECUTIVE_FRAMES: int = 2
     CONSECUTIVE_TIME_WINDOW: float = 3.0
     TOP_K: int = 5
     ENROLL_FRONT_ONLY: bool = False
@@ -69,10 +69,11 @@ class Settings(BaseSettings):
     TELEMETRY_LOGGING_ENABLED: bool = False
 
     # Multi-frame confirmation settings
-    MULTI_FRAME_MODE: str = "consecutive"  # "consecutive" or "majority"
-    FRAME_BUFFER_SIZE: int = 6
-    MIN_CONSECUTIVE_MATCHES: int = 3
-    MIN_MATCHES: int = 3
+    MULTI_FRAME_MODE: str = "majority"  # "consecutive" or "majority"
+    FRAME_BUFFER_SIZE: int = 3
+    MIN_CONSECUTIVE_MATCHES: int = 2
+    MIN_MATCHES: int = 2
+    SCORE_MARGIN_THRESHOLD: float = 0.0
 
     # Face quality gate settings
     FACE_QUALITY_GATE_ENABLED: bool = False

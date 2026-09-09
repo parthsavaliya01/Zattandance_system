@@ -161,8 +161,7 @@ class QdrantSearchEngine:
                         f"Passed: {passed}."
                     )
 
-                if passed and not verified_candidates:
-                    # Keep the first verified candidate to return
+                if passed:
                     verified_candidates.append({
                         "id": r.id,
                         "score": avg_sim,
@@ -175,6 +174,26 @@ class QdrantSearchEngine:
                             "count_exceeded": count_exceeded
                         }
                     })
+                    if len(verified_candidates) >= 2:
+                        break
+
+            if len(verified_candidates) > 1:
+                top1 = verified_candidates[0]
+                top2 = verified_candidates[1]
+                margin = top1["score"] - top2["score"]
+                top1["payload"]["top2_doctor_id"] = top2["payload"]["doctor_id"]
+                top1["payload"]["top2_score"] = top2["score"]
+                top1["payload"]["score_margin"] = margin
+
+                margin_threshold = settings.SCORE_MARGIN_THRESHOLD if hasattr(settings, "SCORE_MARGIN_THRESHOLD") else 0.0
+                if margin_threshold > 0.0 and margin < margin_threshold:
+                    if settings.TELEMETRY_LOGGING_ENABLED:
+                        logger.warning(
+                            f"[AMBIGUOUS MATCH REJECTED] Top-1 {top1['payload']['doctor_id']} (score={top1['score']:.4f}) "
+                            f"vs Top-2 {top2['payload']['doctor_id']} (score={top2['score']:.4f}), "
+                            f"margin={margin:.4f} < threshold={margin_threshold:.4f}"
+                        )
+                    return []
 
             # Stage 2 logging for expected doctor if not shortlisted in Stage 1
             if expected_doctor_id and not any((r.payload or {}).get("doctor_id") == expected_doctor_id for r in result.points):

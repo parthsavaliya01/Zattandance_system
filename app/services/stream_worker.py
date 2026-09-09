@@ -498,14 +498,11 @@ class StreamWorker:
                 results = self.search_engine.search(embedding.tolist())
 
                 if not results:
-                    # Verification failed / Reset temporal consistency
-                    state["consecutive_doctor_id"] = None
-                    state["consecutive_timestamps"] = []
-                    
                     if "history" not in state:
                         state["history"] = []
                     state["history"].append(None)
-                    if len(state["history"]) > (settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6):
+                    frame_buffer_size = settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 3
+                    if len(state["history"]) > frame_buffer_size:
                         state["history"].pop(0)
 
                     # Log the miss and current buffer state
@@ -513,7 +510,7 @@ class StreamWorker:
                         history_str = [str(x) if x is not None else "Unknown" for x in state["history"]]
                         self.logger.info(
                             f"[MULTI-FRAME MISS] Track {track_id} failed verification on this frame. "
-                            f"Recent buffer contents: {history_str}. Mode: {settings.MULTI_FRAME_MODE if hasattr(settings, 'MULTI_FRAME_MODE') else 'consecutive'}"
+                            f"Recent buffer contents: {history_str}."
                         )
 
                     if not state.get("low_score_saved"):
@@ -531,13 +528,11 @@ class StreamWorker:
                 doctor_name = payload.get("doctor_name", "Unknown")
 
                 if score < MARGINAL_LOW or not doctor_id:
-                    state["consecutive_doctor_id"] = None
-                    state["consecutive_timestamps"] = []
-                    
                     if "history" not in state:
                         state["history"] = []
                     state["history"].append(None)
-                    if len(state["history"]) > (settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6):
+                    frame_buffer_size = settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 3
+                    if len(state["history"]) > frame_buffer_size:
                         state["history"].pop(0)
 
                     # Log the miss and current buffer state
@@ -545,7 +540,7 @@ class StreamWorker:
                         history_str = [str(x) if x is not None else "Unknown" for x in state["history"]]
                         self.logger.info(
                             f"[MULTI-FRAME MISS] Track {track_id} had score < MARGINAL_LOW or no doctor_id on this frame. "
-                            f"Recent buffer contents: {history_str}. Mode: {settings.MULTI_FRAME_MODE if hasattr(settings, 'MULTI_FRAME_MODE') else 'consecutive'}"
+                            f"Recent buffer contents: {history_str}."
                         )
 
                     if not state.get("low_score_saved"):
@@ -557,43 +552,30 @@ class StreamWorker:
                     continue
 
                 # ── stage 7: temporal consistency ─────────────────────────
-                multi_frame_mode = settings.MULTI_FRAME_MODE if hasattr(settings, "MULTI_FRAME_MODE") else "consecutive"
-                frame_buffer_size = settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 6
-                min_matches = settings.MIN_MATCHES if hasattr(settings, "MIN_MATCHES") else 3
-                min_consecutive_matches = settings.MIN_CONSECUTIVE_MATCHES if hasattr(settings, "MIN_CONSECUTIVE_MATCHES") else 3
-                consec_window = settings.CONSECUTIVE_TIME_WINDOW if hasattr(settings, "CONSECUTIVE_TIME_WINDOW") else 3.0
+                multi_frame_mode = settings.MULTI_FRAME_MODE if hasattr(settings, "MULTI_FRAME_MODE") else "majority"
+                frame_buffer_size = settings.FRAME_BUFFER_SIZE if hasattr(settings, "FRAME_BUFFER_SIZE") else 3
+                min_matches = settings.MIN_MATCHES if hasattr(settings, "MIN_MATCHES") else 2
 
                 passed_attendance = False
 
                 if "history" not in state:
                     state["history"] = []
 
-                # Add to history
+                # Track identity continuity: If a different verified doctor_id appears on the same track,
+                # reset history to start fresh for the new identity (prevents A, B, A mixed identity count).
+                existing_valid_docs = [x for x in state["history"] if x is not None]
+                if existing_valid_docs and any(x != doctor_id for x in existing_valid_docs):
+                    state["history"] = []
+
+                # Add to history buffer
                 state["history"].append(doctor_id)
                 if len(state["history"]) > frame_buffer_size:
                     state["history"].pop(0)
 
-                if multi_frame_mode == "majority":
-                    # Count occurrences of this doctor_id in the history
-                    match_count = sum(1 for x in state["history"] if x == doctor_id)
-                    if match_count >= min_matches:
-                        passed_attendance = True
-                else:
-                    # Strict consecutive match
-                    if state.get("consecutive_doctor_id") == doctor_id:
-                        state["consecutive_timestamps"].append(current_time)
-                    else:
-                        state["consecutive_doctor_id"] = doctor_id
-                        state["consecutive_timestamps"] = [current_time]
-
-                    # Keep only timestamps within window
-                    state["consecutive_timestamps"] = [
-                        t for t in state["consecutive_timestamps"]
-                        if current_time - t <= consec_window
-                    ]
-
-                    if len(state["consecutive_timestamps"]) >= min_consecutive_matches:
-                        passed_attendance = True
+                # 2-of-3 Sliding Window Confirmation: Count verified occurrences of this doctor_id in the buffer
+                match_count = sum(1 for x in state["history"] if x == doctor_id)
+                if match_count >= min_matches:
+                    passed_attendance = True
 
                 # Log final decision on the track (only once when firing or when first saving/skipping missed proof)
                 should_log_decision = False
