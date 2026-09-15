@@ -525,9 +525,9 @@ class StreamWorker:
                 score       = top["score"] # This is the average similarity of the 5 embeddings
                 payload     = top.get("payload", {})
                 doctor_id   = payload.get("doctor_id")
-                doctor_name = payload.get("doctor_name", "Unknown")
-
-                if score < MARGINAL_LOW or not doctor_id:
+                doctor_name = payload.get("doctor_name", doctor_id) or "Unknown"
+                verification_threshold = settings.VERIFICATION_THRESHOLD if hasattr(settings, "VERIFICATION_THRESHOLD") else 0.36
+                if score < verification_threshold or not doctor_id:
                     if "history" not in state:
                         state["history"] = []
                     state["history"].append(None)

@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     FRAME_BUFFER_SIZE: int = 3
     MIN_CONSECUTIVE_MATCHES: int = 2
     MIN_MATCHES: int = 2
-    SCORE_MARGIN_THRESHOLD: float = 0.0
+    SCORE_MARGIN_THRESHOLD: float = 0.010
 
     # Face quality gate settings
     FACE_QUALITY_GATE_ENABLED: bool = False

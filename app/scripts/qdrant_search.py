@@ -145,8 +145,8 @@ class QdrantSearchEngine:
                 avg_sim = sum(similarities) / len(similarities)
                 count_exceeded = sum(1 for s in similarities if s >= verification_threshold)
                 
-                # Verification rules
-                passed = (avg_sim >= verification_threshold or count_exceeded >= 3)
+                # Verification rules: average similarity must meet verification_threshold and at least 2 enrollment embeddings must agree
+                passed = (avg_sim >= verification_threshold and count_exceeded >= 2)
                 
                 # Log Stage 2 results
                 if settings.TELEMETRY_LOGGING_ENABLED or passed:
@@ -185,13 +185,13 @@ class QdrantSearchEngine:
                 top1["payload"]["top2_score"] = top2["score"]
                 top1["payload"]["score_margin"] = margin
 
-                margin_threshold = settings.SCORE_MARGIN_THRESHOLD if hasattr(settings, "SCORE_MARGIN_THRESHOLD") else 0.0
-                if margin_threshold > 0.0 and margin < margin_threshold:
+                margin_threshold = settings.SCORE_MARGIN_THRESHOLD if hasattr(settings, "SCORE_MARGIN_THRESHOLD") else 0.010
+                if top1["score"] < 0.400 and margin_threshold > 0.0 and margin < margin_threshold:
                     if settings.TELEMETRY_LOGGING_ENABLED:
                         logger.warning(
-                            f"[AMBIGUOUS MATCH REJECTED] Top-1 {top1['payload']['doctor_id']} (score={top1['score']:.4f}) "
-                            f"vs Top-2 {top2['payload']['doctor_id']} (score={top2['score']:.4f}), "
-                            f"margin={margin:.4f} < threshold={margin_threshold:.4f}"
+                            f"[AMBIGUOUS BORDERLINE MATCH REJECTED] Top-1 {top1['payload']['doctor_id']} (score={top1['score']:.6f}) "
+                            f"vs Top-2 {top2['payload']['doctor_id']} (score={top2['score']:.6f}), "
+                            f"margin={margin:.6f} < threshold={margin_threshold:.6f}"
                         )
                     return []
 
