@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     MIN_BLUR_SCORE: float = 15.0
     MAX_TRACKING_DURATION_SECONDS: float = 0.0
 
+    # Missed proof category toggles
+    ENABLE_MISSED_PROOF_BLURRY: bool = False
+    ENABLE_MISSED_PROOF_INVALID_ANGLE: bool = False
+    ENABLE_MISSED_PROOF_LOW_SCORE: bool = False
+    ENABLE_MISSED_PROOF_UNCONFIRMED: bool = True
+
     MAX_LOG_FILE_SIZE_MB: int = 10
 
 

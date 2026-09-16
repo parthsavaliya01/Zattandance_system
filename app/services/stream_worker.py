@@ -737,6 +737,16 @@ class StreamWorker:
 
     def _save_missed_proof(self, frame, area, category, value_str, name="Unknown"):
         try:
+            # Missed proof category toggles
+            if category == "blurry" and not getattr(settings, "ENABLE_MISSED_PROOF_BLURRY", False):
+                return None
+            if category == "invalid_angle" and not getattr(settings, "ENABLE_MISSED_PROOF_INVALID_ANGLE", False):
+                return None
+            if category == "low_score" and not getattr(settings, "ENABLE_MISSED_PROOF_LOW_SCORE", False):
+                return None
+            if category == "unconfirmed" and not getattr(settings, "ENABLE_MISSED_PROOF_UNCONFIRMED", True):
+                return None
+
             now = datetime.now(tz)
             date_str = now.strftime("%Y%m%d")
             time_str = now.strftime("%H%M%S")
