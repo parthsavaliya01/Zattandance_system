@@ -590,13 +590,13 @@ class StreamWorker:
                     final_recog = "ACCEPT" if passed_attendance else "REJECT"
                     
                     if passed_attendance:
-                        proof_decision = "SUCCESS"
+                        proof_decision_str = "NO (Attendance Fired)"
                         reason = "Temporal and similarity checks passed"
                     elif score < threshold:
-                        proof_decision = "MISSED"
+                        proof_decision_str = "YES (Saved to missed_proofs/low_score)"
                         reason = "Similarity score below threshold"
                     else:
-                        proof_decision = "SKIP"
+                        proof_decision_str = "YES (Saved to missed_proofs/unconfirmed)"
                         reason = "Similarity passed, but temporal check failed"
 
                     self.logger.info(
@@ -607,7 +607,7 @@ class StreamWorker:
                         f"Verification: PASS\n"
                         f"Temporal: {temporal_status}\n"
                         f"Attendance Decision: {final_recog}\n"
-                        f"Missed Proof Decision: {'YES' if proof_decision == 'MISSED' else 'NO'}\n"
+                        f"Missed Proof Decision: {proof_decision_str}\n"
                         f"Reason: {reason}"
                     )
 

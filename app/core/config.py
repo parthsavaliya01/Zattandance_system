@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     FACE_INITIAL_THRESHOLD: float = 0.38
     FACE_CONFIRM_THRESHOLD: float = 0.40
 
-    RECORDING_ENABLED: bool = True
+    RECORDING_ENABLED: bool = False
     RECORD_START_TIME: str = "07:00"
     RECORD_STOP_TIME: str = "21:00"
     RECORDINGS_PATH: str = "./recordings"

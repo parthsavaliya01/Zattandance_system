@@ -85,7 +85,7 @@ class QdrantSearchEngine:
                     if settings.TELEMETRY_LOGGING_ENABLED:
                         logger.info(f"[STAGE 1 CENTROID] Expected doctor {expected_doctor_id} has no centroid registered.")
 
-            verified_candidates = []
+            evaluated_candidates = []
 
             for r in result.points:
                 centroid_score = r.score
@@ -161,25 +161,29 @@ class QdrantSearchEngine:
                         f"Passed: {passed}."
                     )
 
-                if passed:
-                    verified_candidates.append({
-                        "id": r.id,
-                        "score": avg_sim,
-                        "payload": {
-                            "doctor_id": doctor_id,
-                            "doctor_name": doctor_name,
-                            "profile_path": payload.get("profile_path", ""),
-                            "centroid_score": centroid_score,
-                            "avg_similarity": avg_sim,
-                            "count_exceeded": count_exceeded
-                        }
-                    })
-                    if len(verified_candidates) >= 2:
-                        break
+                evaluated_candidates.append({
+                    "id": r.id,
+                    "score": avg_sim,
+                    "passed": passed,
+                    "payload": {
+                        "doctor_id": doctor_id,
+                        "doctor_name": doctor_name,
+                        "profile_path": payload.get("profile_path", ""),
+                        "centroid_score": centroid_score,
+                        "avg_similarity": avg_sim,
+                        "count_exceeded": count_exceeded
+                    }
+                })
 
-            if len(verified_candidates) > 1:
-                top1 = verified_candidates[0]
-                top2 = verified_candidates[1]
+            if not evaluated_candidates:
+                return []
+
+            top1 = evaluated_candidates[0]
+            if not top1["passed"]:
+                return []
+
+            if len(evaluated_candidates) > 1:
+                top2 = evaluated_candidates[1]
                 margin = top1["score"] - top2["score"]
                 top1["payload"]["top2_doctor_id"] = top2["payload"]["doctor_id"]
                 top1["payload"]["top2_score"] = top2["score"]
@@ -194,6 +198,8 @@ class QdrantSearchEngine:
                             f"margin={margin:.6f} < threshold={margin_threshold:.6f}"
                         )
                     return []
+
+            return [top1]
 
             # Stage 2 logging for expected doctor if not shortlisted in Stage 1
             if expected_doctor_id and not any((r.payload or {}).get("doctor_id") == expected_doctor_id for r in result.points):
