@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 import multiprocessing as mp
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +45,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting camera workers...")
     from app.services.face_recognition_manager import FaceRecognition
-    FaceRecognition().start_camera()
+    face_recognition = FaceRecognition()
+    face_recognition.start_camera()
+    camera_monitor = threading.Thread(
+        target=face_recognition.run,
+        name="camera-config-monitor",
+        daemon=True,
+    )
+    camera_monitor.start()
+    logger.info("Camera configuration monitor started.")
 
     yield
 

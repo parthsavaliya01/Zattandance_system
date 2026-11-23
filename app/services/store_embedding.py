@@ -261,6 +261,200 @@ def store_single_image(face_path: str,
         logger.exception(f"❌ [store_single_image] Error storing {face_path}: {e}")
         return None
 
+
+def _doctor_payload_filter(doctor_id: str):
+    from qdrant_client.http import models
+
+    values = [str(doctor_id)]
+    if str(doctor_id).isdigit():
+        values.append(int(doctor_id))
+
+    return models.Filter(
+        should=[
+            models.FieldCondition(
+                key="doctor_id",
+                match=models.MatchValue(value=value),
+            )
+            for value in values
+        ]
+    )
+
+
+def _scroll_doctor_points(client, collection_name: str, doctor_id: str):
+    points = []
+    offset = None
+    doctor_filter = _doctor_payload_filter(doctor_id)
+
+    while True:
+        page, offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=doctor_filter,
+            with_payload=True,
+            with_vectors=False,
+            limit=256,
+            offset=offset,
+        )
+        points.extend(page)
+        if offset is None:
+            return points
+
+
+def replace_doctor_embeddings(
+    doctor_id: str,
+    doctor_name: str,
+    image_paths: list[str],
+) -> dict:
+    from qdrant_client.http import models
+
+    doctor_id = str(doctor_id)
+    selected_paths = list(dict.fromkeys(os.path.abspath(path) for path in image_paths))
+    if settings.ENROLL_FRONT_ONLY:
+        selected_paths = [
+            path for path in selected_paths
+            if _is_front_profile_image(os.path.basename(path))
+        ]
+    if not selected_paths:
+        raise ValueError(f"No enrollment images supplied for doctor {doctor_id}")
+
+    details = get_doctor_details_from_db(doctor_id)
+    resolved_doctor_name = details.get("doctor_name") or doctor_name or doctor_id
+    department = details.get("department") or "General"
+    embeddings = []
+    payloads = []
+    for image_path in selected_paths:
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Enrollment image does not exist: {image_path}")
+
+        face_rgb, facial_area = extract_embedding_from_image(image_path)
+        if face_rgb is None:
+            logger.warning("[replace_doctor_embeddings] No usable face in %s", image_path)
+            continue
+
+        embedding = get_embedding_from_face(face_rgb)
+        if embedding is None:
+            raise RuntimeError(f"Embedding extraction failed for {image_path}")
+
+        embeddings.append(embedding.tolist())
+        payloads.append({
+            "doctor_id": doctor_id,
+            "image_number": len(embeddings),
+            "doctor_name": resolved_doctor_name,
+            "profile_path": image_path,
+            "facial_area": facial_area,
+            "department": department,
+        })
+
+    if not embeddings:
+        raise ValueError(f"No usable face images found for doctor {doctor_id}")
+
+    qdrant_client = qdrant_service.connect()
+    collection_names = [
+        settings.QDRANT_COLLECTION_EMBEDDINGS,
+        settings.QDRANT_COLLECTION_CENTROIDS,
+    ]
+    for name in collection_names:
+        if not qdrant_client.collection_exists(name):
+            qdrant_service.create_collection(qdrant_client, name, vector_size=512)
+
+    previous_points = {
+        name: _scroll_doctor_points(qdrant_client, name, doctor_id)
+        for name in collection_names
+    }
+
+    embedding_ids = [
+        int(md5(f"{doctor_id}_img_{index}".encode()).hexdigest()[:16], 16)
+        for index in range(1, len(embeddings) + 1)
+    ]
+    qdrant_service.upsert_points(
+        settings.QDRANT_COLLECTION_EMBEDDINGS,
+        vectors=embeddings,
+        metadatas=payloads,
+        ids=embedding_ids,
+    )
+
+    centroid = np.mean(np.asarray(embeddings), axis=0)
+    centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-6)
+    spread, adaptive_threshold = compute_calibration_metrics(embeddings)
+    centroid_id = int(md5(f"{doctor_id}_centroid".encode()).hexdigest()[:16], 16)
+    centroid_payload = {
+        "doctor_id": doctor_id,
+        "doctor_name": payloads[0]["doctor_name"],
+        "department": payloads[0]["department"],
+        "profile_path": payloads[0]["profile_path"],
+        "intra_doctor_spread": spread,
+        "adaptive_threshold": adaptive_threshold,
+    }
+    qdrant_service.upsert_points(
+        settings.QDRANT_COLLECTION_CENTROIDS,
+        vectors=[centroid_norm.tolist()],
+        metadatas=[centroid_payload],
+        ids=[centroid_id],
+    )
+
+    removed_points = {}
+    keep_ids = {
+        settings.QDRANT_COLLECTION_EMBEDDINGS: set(embedding_ids),
+        settings.QDRANT_COLLECTION_CENTROIDS: {centroid_id},
+    }
+    for name, points in previous_points.items():
+        stale_ids = [point.id for point in points if point.id not in keep_ids[name]]
+        if stale_ids:
+            qdrant_client.delete(
+                collection_name=name,
+                points_selector=models.PointIdsList(points=stale_ids),
+                wait=True,
+            )
+        removed_points[name] = len(stale_ids)
+
+    logger.info(
+        "[replace_doctor_embeddings] Replaced doctor %s embeddings with %s image(s)",
+        doctor_id,
+        len(embeddings),
+    )
+    return {
+        "doctor_id": doctor_id,
+        "stored_images": len(embeddings),
+        "removed_stale_points": removed_points,
+    }
+
+
+def delete_doctor_embeddings(doctor_id: str) -> dict:
+    from qdrant_client.http import models
+
+    doctor_id = str(doctor_id)
+    client = qdrant_service.connect()
+    deleted_points = {}
+
+    for collection_name in [
+        settings.QDRANT_COLLECTION_EMBEDDINGS,
+        settings.QDRANT_COLLECTION_CENTROIDS,
+    ]:
+        if not client.collection_exists(collection_name):
+            logger.warning(
+                "[delete_doctor_embeddings] Collection %s does not exist",
+                collection_name,
+            )
+            deleted_points[collection_name] = 0
+            continue
+
+        points = _scroll_doctor_points(client, collection_name, doctor_id)
+        point_ids = [point.id for point in points]
+        if point_ids:
+            client.delete(
+                collection_name=collection_name,
+                points_selector=models.PointIdsList(points=point_ids),
+                wait=True,
+            )
+        deleted_points[collection_name] = len(point_ids)
+
+    logger.info(
+        "[delete_doctor_embeddings] Deleted doctor %s from Qdrant collections: %s",
+        doctor_id,
+        deleted_points,
+    )
+    return {"doctor_id": doctor_id, "deleted_points": deleted_points}
+
+
 def store_multiple_images_parallel(root_dir: str,
                                    collection_name: str = "doctors",
                                    batch_size: int = 200

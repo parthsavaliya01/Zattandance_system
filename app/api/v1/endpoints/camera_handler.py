@@ -6,6 +6,20 @@ from app.services.face_recognition_manager import FaceRecognition
 router = APIRouter(tags=['Camera Handler'])
 face_recognition = FaceRecognition()
 
+@router.post("/cameras/sync")
+def sync_cameras():
+    face_recognition.sync_cameras()
+    return {
+        "status": "synced",
+        "running_cameras": face_recognition.get_camera_status(),
+    }
+
+@router.get("/cameras/status")
+def camera_status():
+    return {
+        "running_cameras": face_recognition.get_camera_status(),
+    }
+
 @router.post("/start/{camera_id}")
 def start_single_camera(camera_id: str):
     ok = face_recognition.start_single_camera_by_id(camera_id)

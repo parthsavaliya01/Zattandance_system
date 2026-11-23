@@ -1,7 +1,6 @@
 # app/services/face_recognition_manager.py
 import logging
-from multiprocessing import Process
-from threading import Thread
+from threading import Event, Thread
 import time
 from typing import Dict
 
@@ -13,7 +12,29 @@ logger = logging.getLogger(__name__)
 
 # Global registry (per FastAPI instance)
 CAMERA_THREADS: Dict[str, Thread] = {}
+CAMERA_STOP_EVENTS: Dict[str, Event] = {}
+CAMERA_WORKERS: Dict[str, StreamWorker] = {}
 CHECK_INTERVAL = 10
+
+
+def redact_rtsp_url(url: str) -> str:
+    if not url:
+        return url
+
+    prefix, separator, remainder = url.partition("://")
+    if not separator:
+        return url
+
+    credential_end = remainder.rfind("@")
+    if credential_end == -1:
+        return url
+
+    credential = remainder[:credential_end]
+    if ":" not in credential:
+        return url
+
+    username = credential.split(":", 1)[0]
+    return f"{prefix}://{username}:***@{remainder[credential_end + 1:]}"
 
 
 class FaceRecognition:
@@ -23,7 +44,7 @@ class FaceRecognition:
     def _fetch_active_cameras(self):
         return fetch_active_cameras()
 
-    def camera_worker(self, camera_id: str, cam: dict):
+    def camera_worker(self, camera_id: str, cam: dict, stop_event: Event):
         """Target function for each camera thread"""
         cam_logger = setup_camera_logger(camera_id)
         cam_logger.info(f"[BOOT] Starting StreamWorker for {camera_id}")
@@ -32,7 +53,32 @@ class FaceRecognition:
             stream_url=cam["url"],
             monitoring_area=cam["area"]
         )
-        worker.run()
+        CAMERA_WORKERS[camera_id] = worker
+        if stop_event.is_set():
+            worker.stop_event.set()
+        try:
+            worker.run()
+        finally:
+            if CAMERA_WORKERS.get(camera_id) is worker:
+                CAMERA_WORKERS.pop(camera_id, None)
+
+    def _start_camera_worker(self, cam: dict, daemon: bool = True):
+        cam_id = cam["camera_id"]
+        stop_event = Event()
+        thread = Thread(
+            target=self.camera_worker,
+            args=(cam_id, cam, stop_event),
+            daemon=daemon,
+        )
+        CAMERA_STOP_EVENTS[cam_id] = stop_event
+        CAMERA_THREADS[cam_id] = thread
+        thread.start()
+        logger.info(
+            "[FACE-RECOGNITION] Camera worker started %s (%s) -> %s",
+            cam_id,
+            cam["area"],
+            redact_rtsp_url(cam["url"]),
+        )
 
 
     def start_camera(self):
@@ -49,24 +95,8 @@ class FaceRecognition:
                 skipped.append(cam_id)
                 continue
 
-            # p = Process(
-            #     target= self.camera_worker,
-            #     args=(cam_id, cam),
-            #     daemon=False,   # important for FastAPI lifecycle
-            # )
-            # p.start()
-            # CAMERA_THREADS[cam_id] = p
-
-            t = Thread(target=self.camera_worker, args=(cam_id, cam), daemon=True)
-            t.start()
-            CAMERA_THREADS[cam_id] = t
-
+            self._start_camera_worker(cam)
             started.append(cam_id)
-
-            logger.info(
-                f"[FACE-RECOGNITION] Camera started {cam_id} "
-                f"({cam['area']}) -> {cam['url']}"
-            )
 
         return {
             "started": started,
@@ -93,25 +123,19 @@ class FaceRecognition:
         if camera_id in CAMERA_THREADS and CAMERA_THREADS[camera_id].is_alive():
             return False
 
-        # p = Process(
-        #     target=self.camera_worker,
-        #     args=(camera_id, cam),
-        #     daemon=False
-        # )
-        # p.start()
-
-        # CAMERA_THREADS[camera_id] = p
-
-        t = Thread(target=self.camera_worker, args=(camera_id, cam), daemon=False)
-        t.start()
-        CAMERA_THREADS[camera_id] = t
+        self._start_camera_worker(cam, daemon=False)
         return True
 
 
     def stop_camera(self,camera_id: str):
         thread = CAMERA_THREADS.get(camera_id)
         if thread and thread.is_alive():
+            stop_event = CAMERA_STOP_EVENTS.get(camera_id)
+            if stop_event:
+                stop_event.set()
             CAMERA_THREADS.pop(camera_id,None)
+            CAMERA_STOP_EVENTS.pop(camera_id, None)
+            CAMERA_WORKERS.pop(camera_id, None)
             logger.info(f"[FACE-RECOGNITION] Camera stopped: {camera_id}")
             return True
         return False
@@ -123,12 +147,29 @@ class FaceRecognition:
         cameras = self._fetch_active_cameras()
         active_ids = {c["camera_id"] for c in cameras}
 
-        # Start missing cameras
+        # Start new cameras and restart workers whose configuration changed.
         for cam in cameras:
-            if cam["camera_id"] not in CAMERA_THREADS:
-                self.start_camera(cam)
+            cam_id = cam["camera_id"]
+            thread = CAMERA_THREADS.get(cam_id)
+            worker = CAMERA_WORKERS.get(cam_id)
+            config_changed = worker is not None and (
+                worker.stream_url != cam["url"]
+                or worker.monitoring_area != cam["area"]
+            )
 
-        # Stop disabled cameras
+            if thread and thread.is_alive() and not config_changed:
+                continue
+
+            if thread:
+                stop_event = CAMERA_STOP_EVENTS.pop(cam_id, None)
+                if stop_event:
+                    stop_event.set()
+                CAMERA_THREADS.pop(cam_id, None)
+                CAMERA_WORKERS.pop(cam_id, None)
+
+            self._start_camera_worker(cam)
+
+        # Stop cameras removed, disabled, or assigned to an unsupported area.
         for cam_id in list(CAMERA_THREADS.keys()):
             if cam_id not in active_ids:
                 self.stop_camera(cam_id)
@@ -137,10 +178,12 @@ class FaceRecognition:
         """
         Restart crashed workers
         """
-        for cam_id, thread in CAMERA_THREADS.items():
+        for cam_id, thread in list(CAMERA_THREADS.items()):
             if not thread.is_alive():
                 logger.warning(f"[MONITOR] Camera crashed: {cam_id}")
                 CAMERA_THREADS.pop(cam_id, None)
+                CAMERA_STOP_EVENTS.pop(cam_id, None)
+                CAMERA_WORKERS.pop(cam_id, None)
 
     def run(self):
         logger.info("[MANAGER] Camera Manager started")
