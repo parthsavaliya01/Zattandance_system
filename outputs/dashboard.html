@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Attendance System - Dashboard</title>
+    <!--
+        Restored 2026-11-25 after accidental deletion.
+        Base: original dashboard.html (2026-06-23, recovered from face_recognition_code_2026-07-28.zip)
+        + Jul 31 design system and navigation bar (recovered exactly from the editor history).
+        Data: existing API GET /api/v1/image_logs/ (no backend changes).
+        Served by the AI service at /outputs/dashboard.html.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-primary: #080b11;
+            --bg-secondary: rgba(17, 22, 34, 0.75);
+            --bg-tertiary: rgba(26, 33, 50, 0.5);
+            --accent-primary: #3b82f6;
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-danger: #ef4444;
+            --accent-purple: #8b5cf6;
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.05);
+            --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image:
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+
+        /* Navigation */
+        nav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(8, 11, 17, 0.8);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.25rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            letter-spacing: -0.025em;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-logo-icon {
+            width: 2rem;
+            height: 2rem;
+            background: var(--accent-gradient);
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.1rem;
+            -webkit-text-fill-color: initial;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .nav-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
+        }
+
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+            color: var(--text-primary);
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header-section {
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .header-title {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            font-size: 2.25rem;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5rem;
+        }
+
+        .header-subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        .clock {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* Summary cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            padding: 1.25rem 1.5rem;
+            box-shadow: var(--shadow-premium);
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .stat-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin: 0.35rem 0 0.15rem;
+        }
+
+        .stat-hint {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+        }
+
+        .stat-entry .stat-value { color: #60a5fa; }
+        .stat-exit .stat-value { color: #c084fc; }
+        .stat-faces .stat-value { color: #fbbf24; }
+        .stat-confirmed .stat-value { color: #34d399; }
+
+        /* Filters */
+        .filter-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 2rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 1rem;
+            align-items: end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .input-control {
+            width: 100%;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 0.65rem 0.85rem;
+            color: var(--text-primary);
+            font-size: 0.92rem;
+            outline: none;
+            transition: all 0.3s ease;
+            color-scheme: dark;
+        }
+
+        .input-control:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: var(--accent-gradient);
+            color: white;
+            border: none;
+            padding: 0.7rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-ghost {
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: none;
+            border: 1px solid var(--border-color);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        /* Records grid */
+        .records-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .record-card {
+            display: flex;
+            flex-direction: column;
+            border-radius: 1rem;
+            overflow: hidden;
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .record-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.8);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .card-images {
+            display: grid;
+            grid-template-columns: 1fr 1.6fr;
+            height: 180px;
+            background: #05070b;
+        }
+
+        .img-box {
+            position: relative;
+            overflow: hidden;
+            cursor: zoom-in;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .img-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .img-box:hover img {
+            transform: scale(1.05);
+        }
+
+        .img-box.no-image {
+            cursor: default;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-align: center;
+            padding: 0.5rem;
+        }
+
+        .img-tag {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            z-index: 2;
+            padding: 0.2rem 0.55rem;
+            border-radius: 1rem;
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            background: rgba(59, 130, 246, 0.8);
+        }
+
+        .img-tag.frame {
+            background: rgba(139, 92, 246, 0.85);
+        }
+
+        .card-details {
+            padding: 1.1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+        }
+
+        .record-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .score-badge {
+            font-size: 0.78rem;
+            font-weight: 700;
+            padding: 0.2rem 0.6rem;
+            border-radius: 1rem;
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.35);
+        }
+
+        .score-badge.marginal {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border-color: rgba(245, 158, 11, 0.35);
+        }
+
+        .metadata-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .metadata-label {
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .metadata-value {
+            font-weight: 600;
+            text-align: right;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 0.15rem 0.6rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .pill-entry { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+        .pill-exit { background: rgba(139, 92, 246, 0.18); color: #c084fc; }
+        .pill-unknown { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
+        .pill-confirmed { background: rgba(16, 185, 129, 0.18); color: #34d399; }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 2rem;
+            color: var(--text-secondary);
+        }
+
+        /* Loading / empty */
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg-secondary) 25%, rgba(255, 255, 255, 0.05) 50%, var(--bg-secondary) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            border-radius: 1rem;
+            height: 330px;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 5rem 2rem;
+            text-align: center;
+            gap: 1rem;
+            grid-column: 1 / -1;
+        }
+
+        .empty-icon {
+            width: 4rem;
+            height: 4rem;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+        }
+
+        .empty-text {
+            color: var(--text-secondary);
+            max-width: 360px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        /* Full-frame modal */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(4, 6, 10, 0.9);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            padding: 2rem;
+        }
+
+        .modal.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .modal-content {
+            position: relative;
+            max-width: 95vw;
+            max-height: 92vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+        }
+
+        .modal-header {
+            padding: 0.9rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.9rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-img-container {
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+        }
+
+        /* object-fit: contain keeps the original aspect ratio of the stored frame */
+        .modal-img {
+            max-width: 95vw;
+            max-height: calc(92vh - 4rem);
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div class="nav-logo">
+            <div class="nav-logo-icon">A</div>
+            <span>ZYDUS AI ATTENDANCE</span>
+        </div>
+        <div class="nav-links">
+            <a href="/outputs/dashboard.html" class="nav-link active">Dashboard</a>
+            <a href="/outputs/entry_missed_proofs.html" class="nav-link">Entry Missed Proofs</a>
+            <a href="/outputs/exit_missed_proofs.html" class="nav-link">Exit Missed Proofs</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header-section">
+            <div>
+                <h1 class="header-title">Attendance Dashboard</h1>
+                <p class="header-subtitle">Confirmed attendance captured by the entry and exit cameras</p>
+            </div>
+            <span id="current-time" class="clock"></span>
+        </div>
+
+        <!-- Summary cards (follow the filters) -->
+        <div class="stats-grid">
+            <div class="stat-card stat-entry">
+                <div class="stat-label">Total Entry</div>
+                <div class="stat-value" id="stat-entry">–</div>
+                <div class="stat-hint">Confirmed events on entry cameras</div>
+            </div>
+            <div class="stat-card stat-exit">
+                <div class="stat-label">Total Exit</div>
+                <div class="stat-value" id="stat-exit">–</div>
+                <div class="stat-hint">Confirmed events on exit cameras</div>
+            </div>
+            <div class="stat-card stat-faces">
+                <div class="stat-label">Total Captured Faces</div>
+                <div class="stat-value" id="stat-faces">–</div>
+                <div class="stat-hint" id="stat-faces-hint">Confirmed faces + missed-proof faces</div>
+            </div>
+            <div class="stat-card stat-confirmed">
+                <div class="stat-label">Total Confirmed Attendance</div>
+                <div class="stat-value" id="stat-confirmed">–</div>
+                <div class="stat-hint">Confirmed events (entry + exit)</div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <form id="filter-form" class="filter-panel">
+            <div class="form-group">
+                <label for="start-date">Start Date</label>
+                <input type="date" id="start-date" class="input-control">
+            </div>
+            <div class="form-group">
+                <label for="end-date">End Date</label>
+                <input type="date" id="end-date" class="input-control">
+            </div>
+            <div class="form-group">
+                <label for="doctor-name">Doctor Name</label>
+                <input type="text" id="doctor-name" class="input-control" placeholder="e.g. Neeta">
+            </div>
+            <div class="form-group">
+                <label for="doctor-id">Doctor / Employee ID</label>
+                <input type="text" id="doctor-id" class="input-control" placeholder="e.g. 153">
+            </div>
+            <div class="form-group">
+                <label for="event-type">Entry / Exit</label>
+                <select id="event-type" class="input-control">
+                    <option value="all">All</option>
+                    <option value="entry">Entry</option>
+                    <option value="exit">Exit</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="camera">Camera</label>
+                <select id="camera" class="input-control">
+                    <option value="all">All cameras</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="min-score">Min Score: <span id="min-score-val">0.35</span></label>
+                <input type="range" id="min-score" min="0.2" max="1.0" step="0.01" value="0.35">
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn">Search</button>
+                <button type="button" id="btn-reset" class="btn btn-ghost">Reset</button>
+            </div>
+        </form>
+
+        <div class="results-bar">
+            <span id="results-text">Loading…</span>
+            <span id="results-note"></span>
+        </div>
+
+        <div id="records-grid" class="records-grid"></div>
+
+        <div class="pagination" id="pagination" hidden>
+            <button type="button" class="btn btn-ghost" id="btn-prev">‹ Previous</button>
+            <span id="page-info"></span>
+            <button type="button" class="btn btn-ghost" id="btn-next">Next ›</button>
+        </div>
+    </div>
+
+    <!-- Full-frame viewer -->
+    <div id="image-modal" class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="modal-title" class="modal-title">Captured Frame</span>
+                <button type="button" id="modal-close" class="modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-img-container">
+                <img id="modal-img" class="modal-img" src="" alt="Stored attendance frame">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Camera → event type. Same mapping the backend uses for missed-proof logs
+        // (app/core/logging_config.py: camera 111 = entry, others = exit) and tbl_cameras.monitoring_area.
+        const CAMERA_TYPES = { '111': 'entry', '11112': 'exit' };
+        const PAGE_SIZE = 48;
+        const MARGINAL_SCORE = 0.38;
+
+        const el = (id) => document.getElementById(id);
+        const form = el('filter-form');
+        const grid = el('records-grid');
+        const minScore = el('min-score');
+
+        let allRecords = [];      // confirmed records from /api/v1/image_logs/ for the date range
+        let missedProofs = [];    // from /api/v1/missed_proofs (only used for the Captured Faces card)
+        let filtered = [];
+        let page = 1;
+
+        setInterval(() => { el('current-time').textContent = new Date().toLocaleString(); }, 1000);
+        minScore.addEventListener('input', () => {
+            el('min-score-val').textContent = parseFloat(minScore.value).toFixed(2);
+        });
+
+        function todayISO() {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+
+        function cameraType(cameraId) {
+            return CAMERA_TYPES[String(cameraId)] || 'unknown';
+        }
+
+        // YYYYMMDD from a "YYYY-MM-DD" input value
+        const toCompactDate = (v) => (v ? v.replace(/-/g, '') : '');
+
+        function setDefaults() {
+            el('start-date').value = todayISO();
+            el('end-date').value = todayISO();
+            el('doctor-name').value = '';
+            el('doctor-id').value = '';
+            el('event-type').value = 'all';
+            el('camera').value = 'all';
+            minScore.value = 0.35;
+            el('min-score-val').textContent = '0.35';
+        }
+
+        form.addEventListener('submit', (e) => { e.preventDefault(); fetchData(); });
+        el('btn-reset').addEventListener('click', () => { setDefaults(); fetchData(); });
+        // Client-side filters re-filter instantly without another request
+        ['doctor-id', 'event-type', 'camera'].forEach((id) => el(id).addEventListener('input', () => { page = 1; applyFilters(); }));
+        el('btn-prev').addEventListener('click', () => { page--; render(); });
+        el('btn-next').addEventListener('click', () => { page++; render(); });
+
+        async function fetchData() {
+            renderSkeletons();
+            el('results-text').textContent = 'Fetching data…';
+
+            // Server-side filters supported by the existing image_logs API
+            const params = new URLSearchParams();
+            const start = toCompactDate(el('start-date').value);
+            const end = toCompactDate(el('end-date').value);
+            const name = el('doctor-name').value.trim();
+            if (start) params.append('start_date', start);
+            if (end) params.append('end_date', end);
+            if (name) params.append('doctor_name', name);
+            if (minScore.value) params.append('min_score', minScore.value);
+
+            try {
+                const [logsRes, proofsRes] = await Promise.all([
+                    fetch(`/api/v1/image_logs/?${params.toString()}`),
+                    fetch('/api/v1/missed_proofs'),
+                ]);
+                if (!logsRes.ok) throw new Error(`image_logs API error ${logsRes.status}`);
+                allRecords = await logsRes.json();
+                missedProofs = proofsRes.ok ? ((await proofsRes.json()).proofs || []) : [];
+                populateCameraOptions();
+                page = 1;
+                applyFilters();
+            } catch (err) {
+                console.error('Failed to load attendance', err);
+                renderMessage('⚠️', 'Error Loading Attendance', 'Could not reach the AI service API. Make sure the face_recognition_api container is running.');
+                el('results-text').textContent = 'Error loading data';
+                ['stat-entry', 'stat-exit', 'stat-faces', 'stat-confirmed'].forEach((id) => { el(id).textContent = '–'; });
+            }
+        }
+
+        function populateCameraOptions() {
+            const select = el('camera');
+            const current = select.value;
+            const cams = new Set(Object.keys(CAMERA_TYPES));
+            allRecords.forEach((r) => cams.add(String(r.camera_id)));
+            select.replaceChildren(new Option('All cameras', 'all'));
+            [...cams].sort().forEach((c) => select.appendChild(new Option(`Camera ${c} (${cameraType(c)})`, c)));
+            select.value = [...select.options].some((o) => o.value === current) ? current : 'all';
+        }
+
+        // Filters that the API does not support, applied in the browser
+        function matchesClientFilters(cameraId, doctorId) {
+            const idQuery = el('doctor-id').value.trim().toLowerCase();
+            const type = el('event-type').value;
+            const cam = el('camera').value;
+            if (idQuery && !String(doctorId ?? '').toLowerCase().includes(idQuery)) return false;
+            if (type !== 'all' && cameraType(cameraId) !== type) return false;
+            if (cam !== 'all' && String(cameraId) !== cam) return false;
+            return true;
+        }
+
+        function applyFilters() {
+            filtered = allRecords.filter((r) => matchesClientFilters(r.camera_id, r.doctor_id));
+            updateStats();
+            render();
+        }
+
+        // Missed proofs in the same filter scope, for "Total Captured Faces"
+        function filteredMissedProofs() {
+            if (el('doctor-id').value.trim()) return [];   // missed proofs carry no doctor ID
+            const start = toCompactDate(el('start-date').value);
+            const end = toCompactDate(el('end-date').value);
+            const name = el('doctor-name').value.trim().toLowerCase();
+            return missedProofs.filter((p) => {
+                const cam = (p.filename.match(/_cam([^_.]+)\.jpg$/) || [])[1];
+                if (start && p.date < start) return false;
+                if (end && p.date > end) return false;
+                if (name && !String(p.name).toLowerCase().includes(name)) return false;
+                return matchesClientFilters(cam, null);
+            });
+        }
+
+        function updateStats() {
+            const entry = filtered.filter((r) => cameraType(r.camera_id) === 'entry').length;
+            const exit = filtered.filter((r) => cameraType(r.camera_id) === 'exit').length;
+            const missed = filteredMissedProofs().length;
+            el('stat-entry').textContent = entry;
+            el('stat-exit').textContent = exit;
+            el('stat-confirmed').textContent = filtered.length;
+            el('stat-faces').textContent = filtered.length + missed;
+            el('stat-faces-hint').textContent = `${filtered.length} confirmed + ${missed} missed-proof faces`;
+        }
+
+        function renderSkeletons() {
+            grid.replaceChildren();
+            el('pagination').hidden = true;
+            for (let i = 0; i < 6; i++) {
+                const s = document.createElement('div');
+                s.className = 'skeleton';
+                grid.appendChild(s);
+            }
+        }
+
+        function renderMessage(icon, title, text) {
+            grid.replaceChildren();
+            el('pagination').hidden = true;
+            const box = document.createElement('div');
+            box.className = 'empty-state';
+            const i = document.createElement('div');
+            i.className = 'empty-icon';
+            i.textContent = icon;
+            const h = document.createElement('h3');
+            h.textContent = title;
+            const p = document.createElement('p');
+            p.className = 'empty-text';
+            p.textContent = text;
+            box.append(i, h, p);
+            grid.appendChild(box);
+        }
+
+        function metaRow(label, value) {
+            const row = document.createElement('div');
+            row.className = 'metadata-row';
+            const l = document.createElement('span');
+            l.className = 'metadata-label';
+            l.textContent = label;
+            const v = document.createElement('span');
+            v.className = 'metadata-value';
+            if (value instanceof Node) v.appendChild(value); else v.textContent = value;
+            row.append(l, v);
+            return row;
+        }
+
+        function pill(text, cls) {
+            const s = document.createElement('span');
+            s.className = `pill ${cls}`;
+            s.textContent = text;
+            return s;
+        }
+
+        // Image box; if the stored file is missing, show a placeholder instead of a substitute image
+        function imageBox(url, tag, tagClass, missingText, modalTitle) {
+            const box = document.createElement('div');
+            box.className = 'img-box';
+            const t = document.createElement('span');
+            t.className = `img-tag ${tagClass}`;
+            t.textContent = tag;
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.alt = tag;
+            img.src = url;
+            img.onerror = () => {
+                box.classList.add('no-image');
+                box.replaceChildren(t, document.createTextNode(missingText));
+                box.onclick = null;
+            };
+            box.onclick = () => openModal(url, modalTitle);
+            box.append(t, img);
+            return box;
+        }
+
+        function render() {
+            const total = filtered.length;
+            const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            page = Math.min(Math.max(1, page), pages);
+
+            el('results-text').textContent = total
+                ? `Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} of ${total} confirmed record${total > 1 ? 's' : ''}`
+                : '0 confirmed records';
+            el('results-note').textContent = '';
+
+            if (!total) {
+                renderMessage('🗂️', 'No confirmed attendance found', 'Try another date range or clear the filters.');
+                return;
+            }
+
+            grid.replaceChildren();
+            filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).forEach((r) => {
+                const type = cameraType(r.camera_id);
+                const title = `${r.doctor_name} (${r.doctor_id}) · ${type} · camera ${r.camera_id} · ${r.date_formatted}`;
+
+                const card = document.createElement('div');
+                card.className = 'record-card';
+
+                const images = document.createElement('div');
+                images.className = 'card-images';
+                images.append(
+                    imageBox(r.face_url, 'Face', '', 'No face image', `Face — ${title}`),
+                    imageBox(r.frame_url, 'Full Frame', 'frame', 'Full frame not stored for this record', `Full frame — ${title}`)
+                );
+
+                const details = document.createElement('div');
+                details.className = 'card-details';
+
+                const h = document.createElement('div');
+                h.className = 'record-title';
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = r.doctor_name;
+                const score = document.createElement('span');
+                score.className = `score-badge${r.score < MARGINAL_SCORE ? ' marginal' : ''}`;
+                score.textContent = `${(r.score * 100).toFixed(1)}%`;
+                h.append(nameSpan, score);
+
+                details.append(
+                    h,
+                    metaRow('Doctor / Employee ID', String(r.doctor_id)),
+                    metaRow('Type', pill(type, `pill-${type}`)),
+                    metaRow('Date & Time', r.date_formatted),
+                    metaRow('Camera', `Camera ${r.camera_id}`),
+                    metaRow('Status', pill('Confirmed', 'pill-confirmed'))
+                );
+
+                card.append(images, details);
+                grid.appendChild(card);
+            });
+
+            el('pagination').hidden = pages <= 1;
+            el('page-info').textContent = `Page ${page} of ${pages}`;
+            el('btn-prev').disabled = page <= 1;
+            el('btn-next').disabled = page >= pages;
+        }
+
+        // Full-frame viewer
+        const modal = el('image-modal');
+        function openModal(src, title) {
+            el('modal-img').src = src;
+            el('modal-title').textContent = title;
+            modal.classList.add('active');
+        }
+        function closeModal() {
+            modal.classList.remove('active');
+            el('modal-img').src = '';
+        }
+        el('modal-close').addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+        setDefaults();
+        fetchData();
+    </script>
+</body>
+
+</html>

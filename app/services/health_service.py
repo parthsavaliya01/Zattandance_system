@@ -13,8 +13,30 @@ class HealthService:
             "status": "ok",
             "cameras": self.camera_health(),
             "qdrant": self.qdrant_health(),
-            "rabbitmq": self.rabbitmq_health()
+            "rabbitmq": self.rabbitmq_health(),
+            "gpu": self.gpu_health(),
         }
+
+    def gpu_health(self):
+        # Added field only; "status" above is unchanged for existing callers.
+        try:
+            import torch
+            from app.services.gpu_worker import GPU_STATUS
+
+            yolo_on_gpu = torch.cuda.is_available()
+            adaface = GPU_STATUS.get("adaface_providers", [])
+            detector = GPU_STATUS.get("detector_providers", [])
+            adaface_on_gpu = bool(adaface) and adaface[0] == "CUDAExecutionProvider"
+            detector_on_gpu = bool(detector) and detector[0] == "CUDAExecutionProvider"
+            return {
+                "status": "ok" if (yolo_on_gpu and adaface_on_gpu and detector_on_gpu) else "cpu_fallback",
+                "yolo_on_gpu": yolo_on_gpu,
+                "adaface_providers": adaface,
+                "detector_providers": detector,
+            }
+        except Exception as e:
+            logger.error(f"GPU health failed: {e}")
+            return {"status": "unknown"}
 
     def readiness(self):
         return {

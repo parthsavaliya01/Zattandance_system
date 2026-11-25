@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Attendance System - Exit Missed Proofs</title>
+    <!--
+        Restored 2026-11-25 after accidental deletion.
+        Base: original missed_proofs.html (2026-07-31, recovered from the editor Local History), from which
+        entry_/exit_missed_proofs.html were created on 2026-07-31 (camera-specific views),
+        + date filter (Aug 3) and pagination (Aug 5) re-implemented.
+        Data: existing API GET /api/v1/missed_proofs (no backend changes).
+        PAGE_TYPE below is the only difference between the entry and exit pages.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-primary: #080b11;
+            --bg-secondary: rgba(17, 22, 34, 0.75);
+            --bg-tertiary: rgba(26, 33, 50, 0.5);
+            --accent-primary: #3b82f6;
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-danger: #ef4444;
+            --accent-purple: #8b5cf6;
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.05);
+            --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image:
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+
+        /* Navigation */
+        nav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(8, 11, 17, 0.8);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.25rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            letter-spacing: -0.025em;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-logo-icon {
+            width: 2rem;
+            height: 2rem;
+            background: var(--accent-gradient);
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.1rem;
+            -webkit-text-fill-color: initial;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .nav-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
+        }
+
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+            color: var(--text-primary);
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header Intro */
+        .header-section {
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .header-title {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            font-size: 2.25rem;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5rem;
+        }
+
+        .header-subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        /* Controls / Filter Bar */
+        .control-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1.5rem;
+            margin-bottom: 1.25rem;
+            flex-wrap: wrap;
+        }
+
+        .category-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            background: var(--bg-secondary);
+            padding: 0.35rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--glass-border);
+            gap: 0.25rem;
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.6rem 1.25rem;
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active {
+            background: var(--accent-gradient);
+            color: white;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
+        }
+
+        .filter-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1.5rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            align-items: end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .input-control {
+            width: 100%;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 0.7rem 0.9rem;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.3s ease;
+            color-scheme: dark;
+        }
+
+        .input-control:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: var(--accent-gradient);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 700;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-ghost {
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: none;
+            border: 1px solid var(--border-color);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .results-note {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+
+        /* Proofs Grid */
+        .proofs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Proof Card */
+        .proof-card {
+            display: flex;
+            flex-direction: column;
+            border-radius: 1rem;
+            overflow: hidden;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+        }
+
+        .proof-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.8);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .image-preview-container {
+            position: relative;
+            height: 220px;
+            background: #05070b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            cursor: zoom-in;
+        }
+
+        .image-preview-container.no-image {
+            cursor: default;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .proof-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .proof-card:hover .proof-image {
+            transform: scale(1.05);
+        }
+
+        .card-badge {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            z-index: 5;
+            padding: 0.35rem 0.75rem;
+            border-radius: 2rem;
+            font-size: 0.75rem;
+            font-weight: 800;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            text-transform: uppercase;
+        }
+
+        .badge-unconfirmed {
+            background: rgba(59, 130, 246, 0.25);
+            color: #93c5fd;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+        }
+
+        .badge-low_score {
+            background: rgba(245, 158, 11, 0.25);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+        }
+
+        .badge-blurry {
+            background: rgba(139, 92, 246, 0.25);
+            color: #c084fc;
+            border: 1px solid rgba(139, 92, 246, 0.4);
+        }
+
+        .badge-invalid_angle {
+            background: rgba(239, 68, 68, 0.25);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
+
+        .card-details {
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            flex-grow: 1;
+        }
+
+        .proof-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            color: var(--text-primary);
+        }
+
+        .metadata-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .metadata-label {
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .metadata-value {
+            font-weight: 600;
+            word-break: break-all;
+            max-width: 200px;
+            text-align: right;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 0.15rem 0.6rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .pill-entry { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+        .pill-exit { background: rgba(139, 92, 246, 0.18); color: #c084fc; }
+        .pill-status { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }
+
+        .btn-view-proof {
+            margin-top: 0.5rem;
+            padding: 0.6rem;
+            font-size: 0.85rem;
+            font-weight: 700;
+            border-radius: 0.375rem;
+            width: 100%;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 2rem;
+            color: var(--text-secondary);
+        }
+
+        /* Loading Skeleton */
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg-secondary) 25%, rgba(255, 255, 255, 0.05) 50%, var(--bg-secondary) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            border-radius: 0.5rem;
+        }
+
+        .skeleton-card {
+            height: 400px;
+            border-radius: 1rem;
+        }
+
+        @keyframes loading {
+            0% {
+                background-position: 200% 0;
+            }
+
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        /* Modal Overlay */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(4, 6, 10, 0.9);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            padding: 2rem;
+        }
+
+        .modal.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .modal-content {
+            position: relative;
+            max-width: 90%;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+            transform: scale(0.95);
+            transition: transform 0.3s ease;
+        }
+
+        .modal.active .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
+
+        .modal-note {
+            padding: 0.5rem 1.5rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.75rem;
+            cursor: pointer;
+            transition: color 0.2s;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-img-container {
+            padding: 1rem;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+        }
+
+        /* object-fit: contain keeps the original aspect ratio */
+        .modal-img {
+            max-width: 100%;
+            max-height: 70vh;
+            object-fit: contain;
+            border-radius: 0.5rem;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 6rem 2rem;
+            text-align: center;
+            gap: 1.25rem;
+            grid-column: 1 / -1;
+        }
+
+        .empty-icon {
+            width: 4rem;
+            height: 4rem;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 1.75rem;
+        }
+
+        .empty-text {
+            color: var(--text-secondary);
+            max-width: 320px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Nav -->
+    <nav>
+        <div class="nav-logo">
+            <div class="nav-logo-icon">A</div>
+            <span>ZYDUS AI ATTENDANCE</span>
+        </div>
+        <div class="nav-links">
+            <a href="/outputs/dashboard.html" class="nav-link">Dashboard</a>
+            <a href="/outputs/entry_missed_proofs.html" class="nav-link">Entry Missed Proofs</a>
+            <a href="/outputs/exit_missed_proofs.html" class="nav-link active">Exit Missed Proofs</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Header -->
+        <div class="header-section">
+            <div>
+                <h1 class="header-title" id="page-title">Exit Missed Proofs</h1>
+                <p class="header-subtitle" id="page-subtitle">Unconfirmed exit attendance from the Exit Gate cameras</p>
+            </div>
+            <button id="btn-refresh" class="btn">
+                <span>🔄</span> Refresh Proofs
+            </button>
+        </div>
+
+        <!-- Category tabs (existing missed-proof categories) -->
+        <div class="control-bar">
+            <div class="category-tabs">
+                <button class="tab-btn active" data-category="all">All Proofs</button>
+                <button class="tab-btn" data-category="unconfirmed">Unconfirmed</button>
+                <button class="tab-btn" data-category="low_score">Low Score</button>
+                <button class="tab-btn" data-category="blurry">Blurry</button>
+                <button class="tab-btn" data-category="invalid_angle">Invalid Angle</button>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <form id="filter-form" class="filter-panel">
+            <div class="form-group">
+                <label for="start-date">Start Date</label>
+                <input type="date" id="start-date" class="input-control">
+            </div>
+            <div class="form-group">
+                <label for="end-date">End Date</label>
+                <input type="date" id="end-date" class="input-control">
+            </div>
+            <div class="form-group">
+                <label for="search-name">Doctor Name</label>
+                <input type="text" id="search-name" class="input-control" placeholder="Filter by name...">
+            </div>
+            <div class="form-group">
+                <label for="camera">Camera</label>
+                <select id="camera" class="input-control">
+                    <option value="all">All cameras</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <button type="button" id="btn-reset" class="btn btn-ghost">Clear Filters</button>
+            </div>
+        </form>
+
+        <div class="results-bar">
+            <span id="results-text">Loading…</span>
+            <span class="results-note">Doctor / employee ID is not stored with missed proofs, so it cannot be searched here.</span>
+        </div>
+
+        <!-- Main Grid -->
+        <div id="proofs-grid" class="proofs-grid">
+            <!-- JS injected cards -->
+        </div>
+
+        <div class="pagination" id="pagination" hidden>
+            <button type="button" class="btn btn-ghost" id="btn-prev">‹ Previous</button>
+            <span id="page-info"></span>
+            <button type="button" class="btn btn-ghost" id="btn-next">Next ›</button>
+        </div>
+    </div>
+
+    <!-- Modal for Zoomed Image -->
+    <div id="image-modal" class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="modal-image-title" class="modal-title">Proof Image Detail</span>
+                <button id="modal-close-btn" class="modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-note">This is the stored proof image (face area with padding). The system does not save a full camera frame for missed proofs.</div>
+            <div class="modal-img-container">
+                <img id="modal-img" class="modal-img" src="" alt="Proof detail image">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // The only setting that differs between entry_missed_proofs.html and exit_missed_proofs.html
+        const PAGE_TYPE = 'exit';
+        // Camera → event type (same mapping as the backend's missed-proof loggers: 111 = entry, 11112 = exit)
+        const CAMERA_TYPES = { '111': 'entry', '11112': 'exit' };
+        const PAGE_SIZE = 24;
+        const CATEGORY_LABELS = { unconfirmed: 'Unconfirmed', low_score: 'Low Score', blurry: 'Blurry', invalid_angle: 'Invalid Angle' };
+
+        // DOM Elements
+        const $ = (id) => document.getElementById(id);
+        const proofsGrid = $('proofs-grid');
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        const imageModal = $('image-modal');
+        const modalImg = $('modal-img');
+        const modalImageTitle = $('modal-image-title');
+
+        // State variables
+        let pageProofs = [];   // missed proofs for this page's type (entry or exit)
+        let filtered = [];
+        let activeCategory = 'all';
+        let page = 1;
+
+        // Camera id and capture time come from the saved filename:
+        // {YYYYMMDD}_{HHMMSS}_..._cam{camera_id}.jpg
+        function parseProof(p) {
+            const cam = (p.filename.match(/_cam([^_.]+)\.jpg$/) || [])[1] || '';
+            const t = p.filename.match(/^(\d{8})_(\d{6})_/);
+            const date = t ? t[1] : p.date;
+            const time = t ? t[2] : '';
+            return {
+                ...p,
+                camera: cam,
+                type: CAMERA_TYPES[cam] || 'unknown',
+                dateKey: date,
+                displayDateTime: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}${time ? ` ${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}` : ''}`,
+                sortKey: `${date}${time}`,
+            };
+        }
+
+        // Event Listeners
+        $('btn-refresh').addEventListener('click', fetchProofs);
+        ['start-date', 'end-date', 'search-name', 'camera'].forEach((id) => $(id).addEventListener('input', () => { page = 1; applyFilters(); }));
+        $('filter-form').addEventListener('submit', (e) => e.preventDefault());
+        $('btn-reset').addEventListener('click', () => {
+            $('start-date').value = '';
+            $('end-date').value = '';
+            $('search-name').value = '';
+            $('camera').value = 'all';
+            page = 1;
+            applyFilters();
+        });
+        $('btn-prev').addEventListener('click', () => { page--; renderProofs(); });
+        $('btn-next').addEventListener('click', () => { page++; renderProofs(); });
+
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+                activeCategory = button.getAttribute('data-category');
+                page = 1;
+                applyFilters();
+            });
+        });
+
+        $('modal-close-btn').addEventListener('click', closeModal);
+        imageModal.addEventListener('click', (e) => {
+            if (e.target === imageModal) closeModal();
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+        function closeModal() {
+            imageModal.classList.remove('active');
+            modalImg.src = '';
+        }
+
+        function openModal(imgUrl, titleText) {
+            modalImg.src = imgUrl;
+            modalImageTitle.textContent = titleText;
+            imageModal.classList.add('active');
+        }
+
+        // Fetch proofs data
+        async function fetchProofs() {
+            renderSkeletons();
+            try {
+                const response = await fetch('/api/v1/missed_proofs');
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                const data = await response.json();
+                // Only this page's type: entry page never shows exit proofs and vice versa.
+                // Missed proofs are unconfirmed by definition: the system deletes a track's proofs
+                // once its attendance is confirmed (stream_worker "MISSED PROOF CLEANUP").
+                pageProofs = (data.proofs || [])
+                    .map(parseProof)
+                    .filter(p => p.type === PAGE_TYPE)
+                    .sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+                populateCameraOptions();
+                applyFilters();
+            } catch (err) {
+                console.error('Failed to fetch missed proofs', err);
+                renderMessage('⚠️', 'Error Loading Proofs', 'Could not retrieve missed proofs from the backend server. Make sure the API service is active.');
+                $('results-text').textContent = 'Error loading data';
+            }
+        }
+
+        function populateCameraOptions() {
+            const select = $('camera');
+            const current = select.value;
+            const cams = new Set(Object.keys(CAMERA_TYPES).filter(c => CAMERA_TYPES[c] === PAGE_TYPE));
+            pageProofs.forEach(p => cams.add(p.camera));
+            select.replaceChildren(new Option('All cameras', 'all'));
+            [...cams].sort().forEach(c => select.appendChild(new Option(`Camera ${c}`, c)));
+            select.value = [...select.options].some(o => o.value === current) ? current : 'all';
+        }
+
+        function renderSkeletons() {
+            proofsGrid.replaceChildren();
+            $('pagination').hidden = true;
+            for (let i = 0; i < 6; i++) {
+                const skel = document.createElement('div');
+                skel.className = 'skeleton skeleton-card';
+                proofsGrid.appendChild(skel);
+            }
+        }
+
+        function renderMessage(iconText, titleText, descText) {
+            proofsGrid.replaceChildren();
+            $('pagination').hidden = true;
+            const box = document.createElement('div');
+            box.className = 'empty-state';
+            const icon = document.createElement('div');
+            icon.className = 'empty-icon';
+            icon.textContent = iconText;
+            const title = document.createElement('h3');
+            title.textContent = titleText;
+            const desc = document.createElement('p');
+            desc.className = 'empty-text';
+            desc.textContent = descText;
+            box.append(icon, title, desc);
+            proofsGrid.appendChild(box);
+        }
+
+        // Filter and render logic (category + date range + name + camera, all combined)
+        function applyFilters() {
+            const query = $('search-name').value.toLowerCase().trim();
+            const start = $('start-date').value.replace(/-/g, '');
+            const end = $('end-date').value.replace(/-/g, '');
+            const cam = $('camera').value;
+
+            filtered = pageProofs.filter(proof => {
+                if (activeCategory !== 'all' && proof.category !== activeCategory) return false;
+                if (start && proof.dateKey < start) return false;
+                if (end && proof.dateKey > end) return false;
+                if (cam !== 'all' && proof.camera !== cam) return false;
+                if (query && !proof.name.toLowerCase().includes(query) && !proof.filename.toLowerCase().includes(query)) return false;
+                return true;
+            });
+
+            renderProofs();
+        }
+
+        // Safely render cards (DOM API only, no innerHTML)
+        function renderProofs() {
+            const total = filtered.length;
+            const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            page = Math.min(Math.max(1, page), pages);
+            $('results-text').textContent = total
+                ? `Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} of ${total} unconfirmed ${PAGE_TYPE} record${total > 1 ? 's' : ''}`
+                : `0 unconfirmed ${PAGE_TYPE} records`;
+
+            if (total === 0) {
+                renderMessage('🛡️', 'No Proofs Found', `No ${PAGE_TYPE} missed proofs matched the selected category and filters.`);
+                return;
+            }
+
+            proofsGrid.replaceChildren();
+            filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).forEach(proof => {
+                const card = document.createElement('div');
+                card.className = 'proof-card';
+                const displayName = proof.name !== 'N/A' ? proof.name : 'Unknown Profile';
+                const categoryLabel = CATEGORY_LABELS[proof.category] || proof.category.replace('_', ' ');
+                const modalTitle = `${displayName} - ${categoryLabel} (${proof.displayDateTime}, camera ${proof.camera || '?'})`;
+
+                // Image Container
+                const imgContainer = document.createElement('div');
+                imgContainer.className = 'image-preview-container';
+
+                const img = document.createElement('img');
+                img.className = 'proof-image';
+                img.src = proof.url;
+                img.alt = 'Missed Proof';
+                img.loading = 'lazy';
+
+                const badge = document.createElement('div');
+                badge.className = `card-badge badge-${proof.category}`;
+                badge.textContent = categoryLabel;
+
+                // Placeholder when the stored image is missing
+                img.onerror = () => {
+                    imgContainer.classList.add('no-image');
+                    imgContainer.replaceChildren(badge, document.createTextNode('Image not available'));
+                    imgContainer.onclick = null;
+                    btnView.disabled = true;
+                };
+                imgContainer.onclick = () => openModal(proof.url, modalTitle);
+                imgContainer.appendChild(img);
+                imgContainer.appendChild(badge);
+
+                // Details Container
+                const details = document.createElement('div');
+                details.className = 'card-details';
+
+                const titleText = document.createElement('h3');
+                titleText.className = 'proof-title';
+                titleText.textContent = displayName;
+
+                const createMetaRow = (label, val) => {
+                    const row = document.createElement('div');
+                    row.className = 'metadata-row';
+                    const lblSpan = document.createElement('span');
+                    lblSpan.className = 'metadata-label';
+                    lblSpan.textContent = label;
+                    const valSpan = document.createElement('span');
+                    valSpan.className = 'metadata-value';
+                    if (val instanceof Node) valSpan.appendChild(val); else valSpan.textContent = val;
+                    row.appendChild(lblSpan);
+                    row.appendChild(valSpan);
+                    return row;
+                };
+                const pill = (text, cls) => {
+                    const s = document.createElement('span');
+                    s.className = `pill ${cls}`;
+                    s.textContent = text;
+                    return s;
+                };
+
+                let metricLabel = 'Metric';
+                if (proof.category === 'low_score' || proof.category === 'unconfirmed') metricLabel = 'Similarity Score';
+                else if (proof.category === 'blurry') metricLabel = 'Laplacian Variance';
+                else if (proof.category === 'invalid_angle') metricLabel = 'Angle Check';
+
+                const btnView = document.createElement('button');
+                btnView.className = 'btn btn-secondary btn-view-proof';
+                btnView.textContent = 'Zoom Image';
+                btnView.addEventListener('click', () => openModal(proof.url, modalTitle));
+
+                details.append(
+                    titleText,
+                    createMetaRow('Doctor / Employee ID', '—'),
+                    createMetaRow('Type', pill(PAGE_TYPE, `pill-${PAGE_TYPE}`)),
+                    createMetaRow('Date & Time', proof.displayDateTime),
+                    createMetaRow('Camera', `Camera ${proof.camera || '?'}`),
+                    createMetaRow(metricLabel, proof.score),
+                    createMetaRow('Status', pill(categoryLabel, 'pill-status')),
+                    createMetaRow('File', proof.filename),
+                    btnView
+                );
+
+                card.appendChild(imgContainer);
+                card.appendChild(details);
+                proofsGrid.appendChild(card);
+            });
+
+            $('pagination').hidden = pages <= 1;
+            $('page-info').textContent = `Page ${page} of ${pages}`;
+            $('btn-prev').disabled = page <= 1;
+            $('btn-next').disabled = page >= pages;
+        }
+
+        // Initialize
+        fetchProofs();
+    </script>
+</body>
+
+</html>

@@ -1,7 +1,21 @@
 import logging
 from logging.handlers import BaseRotatingHandler
 import os
+from datetime import datetime
+import pytz
 from app.core.config import settings
+
+_LOG_TZ = pytz.timezone(settings.TIMEZONE)
+
+
+class _LocalTimeFormatter(logging.Formatter):
+    """Log timestamps in settings.TIMEZONE (IST) instead of the container's UTC,
+    so log times match attendance times shown in MySQL and the admin panel.
+    Output format is unchanged: 'YYYY-MM-DD HH:MM:SS,mmm'."""
+
+    @staticmethod
+    def converter(secs):
+        return datetime.fromtimestamp(secs, _LOG_TZ).timetuple()
 
 class DynamicRotatingFileHandler(BaseRotatingHandler):
     def __init__(self, filename, mode='a', maxBytes=0, encoding=None, delay=False):
@@ -59,7 +73,7 @@ def setup_app_logging(level=logging.INFO):
     if root.handlers:
         return  # ✅ already configured
 
-    formatter = logging.Formatter(
+    formatter = _LocalTimeFormatter(
         "%(asctime)s [%(levelname)s] [PID:%(process)d] [%(name)s] %(message)s"
     )
 
@@ -89,7 +103,7 @@ def setup_camera_logger(camera_id: str):
     if logger.handlers:
         return logger  # already configured
 
-    formatter = logging.Formatter(
+    formatter = _LocalTimeFormatter(
         "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
     )
 
@@ -115,7 +129,7 @@ def setup_logging(log_file: str,level=logging.INFO,with_console: bool=True):
     if root.handlers:
         root.handlers.clear()
 
-    formatter = logging.Formatter(
+    formatter = _LocalTimeFormatter(
         "%(asctime)s [%(levelname)s] [PID:%(process)d] [%(name)s] %(message)s"
     )
 
@@ -151,7 +165,7 @@ def setup_missed_proof_logger(camera_id: str):
     if logger.handlers:
         return logger
         
-    formatter = logging.Formatter(
+    formatter = _LocalTimeFormatter(
         "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
     )
     

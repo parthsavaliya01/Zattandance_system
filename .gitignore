@@ -46,7 +46,10 @@ rabbitmq_data/
 
 # --- Media & Temporary Outputs ---
 recordings/
-outputs/
+# Generated images/frames stay ignored; the HTML dashboard pages served from
+# /outputs are tracked so they cannot be lost again (see AI_ATTENDANCE_ARCHITECTURE.md).
+outputs/*
+!outputs/*.html
 uploads
 test_output/
 debug_faces/

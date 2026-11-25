@@ -16,6 +16,25 @@ logger = logging.getLogger(__name__)
 GPU_TASK_QUEUE = queue.Queue(maxsize=32)
 GPU_RESULT_MAP = {}
 
+# Execution providers actually in use (read by /api/v1/health).
+# onnxruntime silently falls back to CPU when CUDA is unavailable, which
+# made recognition ~4x worse for weeks without any error in the app log.
+GPU_STATUS = {
+    "detector_providers": [],
+    "adaface_providers": [],
+}
+
+
+def _log_providers(component: str, providers: list) -> None:
+    if providers and providers[0] == "CUDAExecutionProvider":
+        logger.info(f"[GPU-CHECK] {component} running on GPU · providers={providers}")
+    else:
+        logger.error(
+            f"[GPU-CHECK] {component} is NOT on the GPU (providers={providers}). "
+            f"Recognition will be slow and attendance will be missed. "
+            f"Check `nvidia-smi` on the host."
+        )
+
 # ─────────────────────────────────────────────────────────────
 # 5-point reference landmarks for canonical 112×112 output
 # Order: left_eye, right_eye, nose, mouth_left, mouth_right
@@ -52,6 +71,9 @@ def get_insight_app() -> FaceAnalysis:
         )
         _INSIGHT_APP.prepare(ctx_id=0, det_size=(640, 640))
         logger.info("[InsightFace] buffalo_sc detector loaded.")
+        det_session = getattr(getattr(_INSIGHT_APP, "det_model", None), "session", None)
+        GPU_STATUS["detector_providers"] = det_session.get_providers() if det_session else []
+        _log_providers("InsightFace SCRFD detector", GPU_STATUS["detector_providers"])
     return _INSIGHT_APP
 
 
@@ -145,6 +167,8 @@ class GPUWorker(threading.Thread):
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         self.session = ort.InferenceSession(model_path, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
+        GPU_STATUS["adaface_providers"] = self.session.get_providers()
+        _log_providers("AdaFace IR-101", GPU_STATUS["adaface_providers"])
 
         # Warm up detector on init so first real request isn't slow
         _ = get_insight_app()
